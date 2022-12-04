@@ -1,0 +1,15 @@
+[package]
+name = "boop"
+version = "0.1.0"
+edition = "2021"
+authors = ["Joshua Gerrish <jgerrish@gmail.com>"]
+description = "Test code for a Forth compiler for ARM Cortex-M systems"
+keywords = ["forth", "compiler", "arm", "thumb", "embedded"]
+readme = "README.md"
+repository = "https://github.com/jgerrish/boop"
+homepage = "https://github.com/jgerrish/boop"
+license = "MIT"
+
+[dependencies]
+cortex-m = "0.7"
+panic-halt = "0.2"

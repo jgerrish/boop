@@ -1,0 +1,29 @@
+[package]
+name = "boop-stm32f1"
+version = "0.1.0"
+edition = "2021"
+authors = ["Joshua Gerrish <jgerrish@gmail.com>"]
+description = "Test code for a Forth compiler for ARM Cortex-M systems"
+keywords = ["forth", "compiler", "arm", "thumb", "embedded"]
+readme = "README.md"
+repository = "https://github.com/jgerrish/boop"
+homepage = "https://github.com/jgerrish/boop"
+license = "MIT"
+
+[dependencies]
+boop = { version = "0.1", path = "../boop" }
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+cortex-m-semihosting = "0.5"
+nb = "1"
+stm32f1 = { version = "0.15", features = ["rt", "stm32f103"] }
+stm32f1xx-hal = { version = "0.9", features = ["rt", "stm32f103"] }
+panic-halt = "0.2"
+embedded-hal = { version = "0.2", features = ["unproven"] }
+
+# this lets you use `cargo fix`!
+[[bin]]
+name = "boop-stm32f1"
+test = false
+bench = false
+harness = false
