@@ -72,9 +72,9 @@ pub struct StackFunctions {
     /// The stack initialization function
     pub init: fn(u32, u32),
     /// The push function for the stack
-    pub push: fn(i32) -> core::result::Result<(), crate::stack::Error>,
+    pub push: fn(u32) -> core::result::Result<(), crate::stack::Error>,
     /// The pop function for the stack
-    pub pop: fn() -> core::result::Result<i32, crate::stack::Error>,
+    pub pop: fn() -> core::result::Result<u32, crate::stack::Error>,
     /// Get the bottom address of the stack
     pub get_stack_bottom_safe: fn() -> u32,
 }
@@ -84,9 +84,9 @@ pub struct StackFunctions {
 //     /// Initialize the stack
 //     fn stack_init(stack_addr: u32, stack_bottom: u32);
 //     /// The push function for the stack
-//     fn push(value: i32) -> core::result::Result<(), crate::stack::Error>;
+//     fn push(value: u32) -> core::result::Result<(), crate::stack::Error>;
 //     /// The pop function for the stack
-//     fn pop() -> core::result::Result<i32, crate::stack::Error>;
+//     fn pop() -> core::result::Result<u32, crate::stack::Error>;
 //     /// Get the bottom address of the stack
 //     fn get_stack_bottom_safe() -> u32;
 // }
@@ -211,7 +211,7 @@ pub mod tests {
     /// Test that pushing a value onto the return stack works
     pub fn test_push_rsp_works(
         writer: &mut dyn Write,
-        push_rsp: fn(i32) -> Result<(), crate::stack::Error>,
+        push_rsp: fn(u32) -> Result<(), crate::stack::Error>,
     ) {
         let mut stack_pointer_old: u32;
 
@@ -271,7 +271,7 @@ pub mod tests {
     /// Test that popping value from the return stack works
     pub fn test_pop_rsp_works(stack: &mut Stack) {
         let mut stack_pointer_old: u32;
-        let test_val: i32 = 0x798C6FD6;
+        let test_val: u32 = 0x798C6FD6;
 
         unsafe {
             asm!(

@@ -39,6 +39,17 @@ pub static mut FORTH_PARAMETER_STACK: [u8; 2048] = [0; 2048];
 #[link_section = ".ram2bss"]
 pub static mut FORTH_BUFFER: [u8; 1024] = [0; 1024];
 
+// The jjforth function and data structure FFI
+//
+// We use unsigned 32-bit integers for parameters and return values
+//
+// The data is treated as an opaque value which may contain Forth word
+// pointers, data like keystrokes, error results or other data.
+//
+// Some Forth functions may operate on this data as if it was signed
+// data, in particular the BRANCH word, which does pointer arithmetic
+// with possibly negative offsets.  But casting signed data for
+// storage will work as expected.
 #[link(name = "jjforth-cortex-m3")]
 extern "C" {
     // Stack functions
@@ -46,10 +57,10 @@ extern "C" {
     pub fn jjforth_stack_init(memory_start: u32, stack_bottom: u32);
 
     /// Pop a value from the stack
-    pub fn jjforth_stack_pop(data: &mut i32) -> i32;
+    pub fn jjforth_stack_pop(data: &mut u32) -> u32;
 
     /// Push a value onto the stack
-    pub fn jjforth_stack_push(value: i32) -> i32;
+    pub fn jjforth_stack_push(value: u32) -> u32;
 
     /// Initialize the Forth system
     pub fn jjforth_start();
@@ -64,10 +75,10 @@ extern "C" {
     pub fn jjforth_buffer_clear();
 
     /// Write a single byte to the input buffer
-    pub fn jjforth_buffer_write(word: u32) -> i32;
+    pub fn jjforth_buffer_write(word: u32) -> u32;
 
     /// Read a single byte from the input buffer
-    pub fn jjforth_buffer_read(data: &mut i32) -> u32;
+    pub fn jjforth_buffer_read(data: &mut u32) -> u32;
 }
 
 // Wrapper functions for the assembly code
@@ -83,8 +94,8 @@ pub fn stack_init_safe(memory_start: u32, stack_bottom: u32) {
 }
 
 /// Wrapper to pop a value from the stack
-pub fn stack_pop_safe() -> Result<i32, boop::stack::Error> {
-    let mut data: i32 = 0x79327523;
+pub fn stack_pop_safe() -> Result<u32, boop::stack::Error> {
+    let mut data: u32 = 0x79327523;
     let res = unsafe { jjforth_stack_pop(&mut data) };
     match res {
         0 => Ok(data),
@@ -96,7 +107,7 @@ pub fn stack_pop_safe() -> Result<i32, boop::stack::Error> {
 }
 
 /// Wrapper to push a value onto the stack
-pub fn stack_push_safe(value: i32) -> Result<(), boop::stack::Error> {
+pub fn stack_push_safe(value: u32) -> Result<(), boop::stack::Error> {
     let res = unsafe { jjforth_stack_push(value) };
 
     match res {
@@ -151,7 +162,7 @@ pub fn buffer_write_word_safe(data: u32) -> Result<(), boop::buffer::Error> {
 
 /// Read from the input buffer
 pub fn buffer_read_word_safe() -> Result<u32, boop::buffer::Error> {
-    let mut error_code: i32 = 0;
+    let mut error_code: u32 = 0;
 
     let res = unsafe { jjforth_buffer_read(&mut error_code) };
     match error_code {
