@@ -21,7 +21,6 @@ rustflags = [
   "-C", "linker=arm-none-eabi-gcc",
   "-C", "link-arg=-Wl,-Tlink.x",
   "-C", "link-arg=-nostartfiles",
-  "-L", "/home/josh/src/rust/boop",
 ]
 
 [build]
