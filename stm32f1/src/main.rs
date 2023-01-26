@@ -11,7 +11,9 @@ use boop::{buffer::Buffer, stack::Stack};
 
 use boop_stm32f1::{
     buffer_clear_safe, buffer_init_safe, buffer_read_word_safe, buffer_write_word_safe,
-    get_stack_bottom_safe, stack_init_safe, stack_pop_safe, stack_push_safe, start_safe,
+    dict_add_word_safe, dict_encode_ascii_as_utf32_safe, dict_encode_ascii_string_as_utf32_safe,
+    dict_find_safe, dict_init_safe, dict_word_length_safe, get_stack_bottom_safe, stack_init_safe,
+    stack_pop_safe, stack_push_safe, start_safe,
 };
 
 // use cortex_m::iprintln;
@@ -117,4 +119,25 @@ fn run_tests(writer: &mut dyn Write) {
     boop::stack::run_tests(&mut stack);
 
     run_buffer_tests(writer);
+
+    let dictionary_addr = unsafe { boop_stm32f1::FORTH_DICTIONARY.as_ptr() as *mut &'static [u32] };
+
+    let dictionary_size = unsafe { boop_stm32f1::FORTH_DICTIONARY.len() as u32 };
+
+    boop::dict::run_tests(
+        writer,
+        unsafe { &mut boop_stm32f1::FORTH_WORD_TMP_BUFFER },
+        boop::dict::DictSettings {
+            dictionary_addr,
+            dictionary_size,
+        },
+        boop::dict::DictFunctions {
+            dict_init_safe,
+            dict_add_word_safe,
+            dict_find_safe,
+            dict_word_length_safe,
+            dict_encode_ascii_as_utf32_safe,
+            dict_encode_ascii_string_as_utf32_safe,
+        },
+    );
 }

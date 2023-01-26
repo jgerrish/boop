@@ -6,6 +6,8 @@
 use core::fmt::Write;
 
 pub mod buffer;
+pub mod dict;
+pub mod error;
 pub mod stack;
 
 /// Initialization of the boop system

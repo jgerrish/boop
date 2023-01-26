@@ -1,62 +1,9 @@
 //! Forth stack wrapper with Rust Error results and behavior
 #![warn(missing_docs)]
 
-use core::fmt::{Debug, Display, Formatter, Result, Write};
-// use heapless::pool::singleton::Box;
-// use heapless::pool::Box;
+use core::fmt::Write;
 
-/// An error that can occur when operating on a stack
-#[derive(Eq, PartialEq)]
-pub struct Error {
-    /// A member structure representing the type or kind of error
-    pub kind: ErrorKind,
-}
-
-impl Debug for Error {
-    fn fmt(&self, f: &mut Formatter) -> Result {
-        write!(f, "{}", self.kind)
-    }
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> Result {
-        write!(f, "{}", self.kind)
-    }
-}
-
-impl Error {
-    /// Create a new Error with a given ErrorKind variant
-    pub fn new(kind: ErrorKind) -> Error {
-        Error { kind }
-    }
-}
-
-/// The kinds of errors that can occur working with stacks
-#[derive(Eq, PartialEq)]
-pub enum ErrorKind {
-    /// A stack overflow would occur if an item is pushed
-    StackOverflow,
-    /// A stack underflow would occur if an item is popped
-    StackUnderflow,
-    /// An unknown error type
-    Unknown,
-}
-
-impl Display for ErrorKind {
-    fn fmt(&self, f: &mut Formatter) -> Result {
-        match self {
-            ErrorKind::StackOverflow => write!(f, "A stack overflow occurred"),
-            ErrorKind::StackUnderflow => write!(f, "A stack underflow occurred"),
-            ErrorKind::Unknown => write!(f, "An unknown error occurred"),
-        }
-    }
-}
-
-impl Debug for ErrorKind {
-    fn fmt(&self, f: &mut Formatter) -> Result {
-        write!(f, "{}", self)
-    }
-}
+use crate::error::Error;
 
 /// The settings for the stacks
 pub struct StackSettings {
@@ -72,9 +19,9 @@ pub struct StackFunctions {
     /// The stack initialization function
     pub init: fn(u32, u32),
     /// The push function for the stack
-    pub push: fn(u32) -> core::result::Result<(), crate::stack::Error>,
+    pub push: fn(u32) -> core::result::Result<(), Error>,
     /// The pop function for the stack
-    pub pop: fn() -> core::result::Result<u32, crate::stack::Error>,
+    pub pop: fn() -> core::result::Result<u32, Error>,
     /// Get the bottom address of the stack
     pub get_stack_bottom_safe: fn() -> u32,
 }
@@ -211,7 +158,7 @@ pub mod tests {
     /// Test that pushing a value onto the return stack works
     pub fn test_push_rsp_works(
         writer: &mut dyn Write,
-        push_rsp: fn(u32) -> Result<(), crate::stack::Error>,
+        push_rsp: fn(u32) -> Result<(), crate::error::Error>,
     ) {
         let mut stack_pointer_old: u32;
 
@@ -365,7 +312,7 @@ pub mod tests {
         match res {
             Ok(_) => panic!(),
             Err(e) => {
-                assert_eq!(e.kind, crate::stack::ErrorKind::StackUnderflow);
+                assert_eq!(e.kind, crate::error::ErrorKind::StackUnderflow);
             }
         }
     }

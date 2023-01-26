@@ -164,3 +164,7 @@ Documentation on the ABI for Arm.
 
 [oldnewthing](https://devblogs.microsoft.com/oldnewthing/20210601-00/ "The ARM processor (Thumb-2), part 2: Differences between classic ARM and Thumb-2")
 Discussion of using the IT instruction.
+
+[BinarioBoard](https://github.com/ElectronicToast/BinarioBoard "BinarioBoard")
+A project by Ray Sun from Caltech EE10b, with excellent examples of assembly comments.
+Some of the comments in this project are based on best practices there.

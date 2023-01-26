@@ -15,16 +15,16 @@ LDFLAGS_M3=$(LDFLAGS)
 CFLAGS_M4=$(CFLAGS) -mcpu=cortex-m4 -T memory.x
 LDFLAGS_M4=$(LDFLAGS)
 
-SRCS = buffer.S stack.S jjforth.S
+SRCS = buffer.S stack.S dict.S jjforth.S
 M3_OBJS = $(SRCS:.S=-cortex-m3.o)
 M4_OBJS = $(SRCS:.S=-cortex-m4.o)
 
-PREFIXES=buffer stack jjforth
+PREFIXES=buffer stack dict jjforth
 
 all: libjjforth-cortex-m3.a libjjforth-cortex-m4.a
 
 clean:
-	rm -f jjforth-*.o libjjforth-*.a libjjforth-*.so stack-*.o buffer-*.o
+	rm -f jjforth-*.o libjjforth-*.a libjjforth-*.so stack-*.o buffer-*.o dict-*.o
 
 %-cortex-m3.o: %.S
 	$(CC) $(CFLAGS_M3) -o $@ -c $<

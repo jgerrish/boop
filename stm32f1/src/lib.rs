@@ -4,6 +4,11 @@
 #![warn(missing_docs)]
 #![no_std]
 
+use boop::{
+    dict::{Flag, Word},
+    error::Error,
+};
+
 // Create a new section for a FORTH stack.
 // This memory will be managed by Rust, not assembly code.
 // These variables are not modified directly in Rust, but the data is
@@ -17,6 +22,9 @@
 // and .ram2bss is only A.  Bare ARM devices may not automatically incorporate
 // memory protection, but further OS development might be more strict.
 // Regardless, flags should represent the intent.
+
+// There is a #[used] attribute outlined in RFC 2386 which handles
+// cases related to this.
 
 // Making the variable mutable in Rust marks it as W.
 
@@ -35,9 +43,16 @@ pub static mut FORTH_PARAMETER_STACK: [u8; 2048] = [0; 2048];
 /// For example, if the size allocated below is 1024, and the data
 /// type size is four bytes, then the number of items that can be
 /// stored is 255, not 256.
-
 #[link_section = ".ram2bss"]
 pub static mut FORTH_BUFFER: [u8; 1024] = [0; 1024];
+
+/// temporary buffer to store UTF-32 encoded strings
+#[link_section = ".ram2bss"]
+pub static mut FORTH_WORD_TMP_BUFFER: [u32; 128] = [0; 128];
+
+/// dictionary storage
+#[link_section = ".ram2bss"]
+pub static mut FORTH_DICTIONARY: [u8; 1024] = [0; 1024];
 
 // The jjforth function and data structure FFI
 //
@@ -79,6 +94,26 @@ extern "C" {
 
     /// Read a single byte from the input buffer
     pub fn jjforth_buffer_read(data: &mut u32) -> u32;
+
+    // Dictionary functions
+
+    /// Initialize the dictionary
+    pub fn dict_init(dictionary_addr: *mut u32, dictionary_size: u32);
+
+    /// Get the length of a word given a length / flag field
+    pub fn dict_word_length(flag_field: *const u8) -> u8;
+
+    /// Get the length of a word given a length / flag field
+    pub fn dict_add_word(word: *const u32, length: u32, flags: u8) -> u32;
+
+    /// Encode an ASCII character as UTF-32
+    pub fn dict_encode_ascii_as_utf32(character: u32, result: *mut u32) -> u32;
+
+    /// Encode an ASCII string as a UTF-32 string
+    pub fn dict_encode_ascii_string_as_utf32(src: *const u8, length: u32, dst: *mut u32) -> u32;
+
+    /// Find a word in the dictionary
+    pub fn dict_find(word_pointer: *const u32, length: u32, result: *mut u32) -> *const u32;
 }
 
 // Wrapper functions for the assembly code
@@ -94,28 +129,28 @@ pub fn stack_init_safe(memory_start: u32, stack_bottom: u32) {
 }
 
 /// Wrapper to pop a value from the stack
-pub fn stack_pop_safe() -> Result<u32, boop::stack::Error> {
+pub fn stack_pop_safe() -> Result<u32, boop::error::Error> {
     let mut data: u32 = 0x79327523;
     let res = unsafe { jjforth_stack_pop(&mut data) };
     match res {
         0 => Ok(data),
-        1 => Err(boop::stack::Error::new(
-            boop::stack::ErrorKind::StackUnderflow,
+        1 => Err(boop::error::Error::new(
+            boop::error::ErrorKind::StackUnderflow,
         )),
-        _ => Err(boop::stack::Error::new(boop::stack::ErrorKind::Unknown)),
+        _ => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown)),
     }
 }
 
 /// Wrapper to push a value onto the stack
-pub fn stack_push_safe(value: u32) -> Result<(), boop::stack::Error> {
+pub fn stack_push_safe(value: u32) -> Result<(), boop::error::Error> {
     let res = unsafe { jjforth_stack_push(value) };
 
     match res {
         0 => Ok(()),
-        1 => Err(boop::stack::Error::new(
-            boop::stack::ErrorKind::StackOverflow,
+        1 => Err(boop::error::Error::new(
+            boop::error::ErrorKind::StackOverflow,
         )),
-        _ => Err(boop::stack::Error::new(boop::stack::ErrorKind::Unknown)),
+        _ => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown)),
     }
 }
 
@@ -131,7 +166,7 @@ pub fn get_stack_bottom_safe() -> u32 {
 
 /// Initialize the buffer
 pub fn buffer_init_safe(buffer_start: u32, buffer_end: u32) {
-    unsafe { jjforth_buffer_init(buffer_start as u32, buffer_end as u32) }
+    unsafe { jjforth_buffer_init(buffer_start, buffer_end) }
 }
 
 /// Clear / empty the buffer
@@ -183,3 +218,149 @@ pub fn buffer_read_word_safe() -> Result<u32, boop::buffer::Error> {
 
 // fn main() {
 // }
+
+// Dictionary helpers for the boop library
+
+/// Initialize the dictionary
+///
+/// Initialize the dictionary with an unsigned 32-bit buffer and the
+/// size of the dictionary.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn dict_init_safe(dictionary_addr: *mut &'static [u32], dictionary_size: u32) {
+    unsafe { dict_init(dictionary_addr as *mut u32, dictionary_size) }
+}
+
+/// Find the length of a word given a pointer to the word flag field
+///
+/// word_flag_ptr is a pointer to the word flags and length byte
+/// Return the length of the word
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn dict_word_length_safe(word_flag_ptr: *const u8) -> u8 {
+    unsafe { dict_word_length(word_flag_ptr) }
+}
+
+/// Encode a Rust string as UTF-32 and store in a u32 word buffer
+/// Rust strings are encoded as UTF-8 currently, but we can get individual
+/// characters.
+/// This handles "Unicode scalar values".  This is most Unicode
+/// code points but not high-surrogates and low-surrogates (values
+/// in 0 to 0xD7FF and 0xE000 to 0x10FFFF inclusive)
+fn encode_string_as_utf32(src: &str, dst: &mut [u32]) -> Result<(), Error> {
+    for (i, c) in src.chars().enumerate() {
+        if i >= dst.len() {
+            return Err(boop::error::Error::new(boop::error::ErrorKind::WordTooLong));
+        }
+        dst[i] = c as u32;
+    }
+    Ok(())
+}
+
+/// Add a word to the dictionary
+///
+/// Adds a word to the dictionary
+/// word is the word to add.  It must be less than or equal to 31 characters.
+/// flags is the set of flags to set on the word.
+pub fn dict_add_word_safe(word: &str, flags: &[Flag]) -> Result<(), Error> {
+    let word_len = boop::dict::number_of_characters_in_string(word);
+
+    // First encode as UTF-32
+    unsafe {
+        encode_string_as_utf32(word, &mut FORTH_WORD_TMP_BUFFER)?;
+    }
+
+    let dst = unsafe { FORTH_WORD_TMP_BUFFER.as_mut_ptr() };
+
+    // dict_encode_ascii_string_as_utf32_safe(word, dst)?;
+
+    // Set flags
+    let mut flags_byte: u8 = 0x00;
+    for flag in flags {
+        flags_byte |= match flag {
+            Flag::Hidden => 0x20,
+            Flag::Immediate => 0x80,
+        }
+    }
+
+    let res = unsafe { dict_add_word(dst, word_len, flags_byte) };
+
+    match res {
+        0 => Ok(()),
+        1 => Err(boop::error::Error::new(boop::error::ErrorKind::OutOfMemory)),
+        2 => Err(boop::error::Error::new(boop::error::ErrorKind::WordTooLong)),
+        3 => Err(boop::error::Error::new(
+            boop::error::ErrorKind::WordTooShort,
+        )),
+        _ => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown)),
+    }
+}
+
+/// Find a word in the dictionary
+/// This function returns the Word
+/// word is the word to search for
+pub fn dict_find_safe(word: &str) -> Result<Word, Error> {
+    let word_len = boop::dict::number_of_characters_in_string(word);
+    let mut result: u32 = 0;
+
+    // First encode as UTF-32
+    unsafe {
+        encode_string_as_utf32(word, &mut FORTH_WORD_TMP_BUFFER)?;
+    }
+
+    let dst = unsafe { FORTH_WORD_TMP_BUFFER.as_mut_ptr() };
+
+    // dict_encode_ascii_string_as_utf32_safe(word, dst)?;
+
+    let res = unsafe { dict_find(dst, word_len, &mut result) };
+
+    // Convert the result to a Word structure
+
+    match result {
+        0 => {
+            let word_len = unsafe { *(((res as usize) + 4) as *const u8) };
+            let word_ptr = ((res as usize) + 5) as *const u32;
+            let slice = unsafe { core::slice::from_raw_parts(word_ptr, word_len as usize) };
+            Ok(Word {
+                link: res as u32,
+                flags: word_len,
+                word: slice,
+            })
+        }
+        1 => Err(boop::error::Error::new(
+            boop::error::ErrorKind::WordNotFound,
+        )),
+        _ => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown)),
+    }
+}
+
+/// Encode an ASCII character as UTF-32.
+/// If the character isn't valid ASCII, an ASCIIEncode error is returned.
+pub fn dict_encode_ascii_as_utf32_safe(character: u32) -> Result<u32, Error> {
+    let mut result: u32 = 0;
+
+    let res = unsafe { dict_encode_ascii_as_utf32(character, &mut result) };
+
+    match result {
+        0 => Ok(res),
+        1 => Err(boop::error::Error::new(boop::error::ErrorKind::ASCIIEncode)),
+        _ => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown)),
+    }
+}
+
+/// Encode an ASCII string as a UTF-32 string
+/// If the string isn't valid ASCII, an ASCIIEncode error is returned.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn dict_encode_ascii_string_as_utf32_safe(src: &[u8], dst: *mut u32) -> Result<(), Error> {
+    let word_buf = src.as_ptr();
+    let word_len: usize = src.len();
+
+    let res = unsafe { dict_encode_ascii_string_as_utf32(word_buf, word_len as u32, dst) };
+
+    match res {
+        0 => Ok(()),
+        1 => Err(boop::error::Error::new(boop::error::ErrorKind::ASCIIEncode)),
+        2 => Err(boop::error::Error::new(
+            boop::error::ErrorKind::WordTooShort,
+        )),
+        _ => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown)),
+    }
+}
