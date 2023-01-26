@@ -10,6 +10,7 @@ use core::fmt::Write;
 use crate::error::Error;
 
 /// The different flags a dictionary word can have
+#[derive(PartialEq)]
 pub enum Flag {
     /// If the word is hidden, find won't return it.
     Hidden,
@@ -23,8 +24,10 @@ pub enum Flag {
 pub struct Word {
     /// The link to the previous word in the dictionary
     pub link: u32,
-    /// The word flags and length
-    pub flags: u8,
+    /// The word length
+    pub length: u8,
+    /// The word flags
+    pub flags: &'static [Flag],
     /// The word itself
     pub word: &'static [u32],
 }
@@ -75,6 +78,7 @@ pub fn run_tests(
     tests::test_dict_add_word_works(writer, &settings, &functions);
     tests::test_dict_add_two_words_works(writer, &settings, &functions);
     tests::test_dict_add_hidden_word_works(writer, &settings, &functions);
+    tests::test_dict_add_immediate_word_works(writer, &settings, &functions);
     tests::test_dict_add_chinese_word_works(writer, &settings, &functions);
     tests::test_number_of_characters_in_string_works(writer);
 }
@@ -141,7 +145,7 @@ pub mod tests {
                 )
                 .unwrap();
 
-                assert_eq!(c.flags & 0x1F, 0x04);
+                assert_eq!(c.length, 0x04);
                 assert_eq!(word[0], 0x53);
                 assert_eq!(word[1], 0x54);
                 assert_eq!(word[2], 0x41);
@@ -489,6 +493,171 @@ pub mod tests {
         }
     }
 
+    /// Test that adding and finding an immediate word works
+    pub fn test_dict_add_immediate_word_works(
+        writer: &mut dyn Write,
+        settings: &DictSettings,
+        functions: &DictFunctions,
+    ) {
+        write!(writer, "Initializing dictionary\r\n").unwrap();
+        (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
+
+        write!(writer, "Adding word to dictionary\r\n").unwrap();
+        let res = (functions.dict_add_word_safe)("STAR", &[]);
+
+        match res {
+            Ok(()) => {
+                write!(writer, "SUCCESS: Succeeded adding word to dictionary\r\n").unwrap();
+            }
+            Err(e) => {
+                write!(
+                    writer,
+                    "FAILURE: Failed adding word to dictionary: {}\r\n",
+                    e
+                )
+                .unwrap();
+            }
+        }
+
+        // Make sure the word was added
+        let res = (functions.dict_find_safe)("STAR");
+
+        match res {
+            Ok(_v) => {
+                write!(
+                    writer,
+                    "SUCCESS: Succeeded finding added word in dictionary\r\n"
+                )
+                .unwrap();
+            }
+            Err(e) => {
+                write!(
+                    writer,
+                    "FAILURE: Failed finding added word in dictionary: {}\r\n",
+                    e
+                )
+                .unwrap();
+            }
+        }
+
+        // Double check to make sure it doesn't find junk
+        let res = (functions.dict_find_safe)("TEST");
+
+        match res {
+            Ok(_v) => {
+                write!(
+                    writer,
+                    "FAILURE: Should not find unknown word in dictionary\r\n"
+                )
+                .unwrap();
+            }
+            Err(e) => {
+                write!(
+                    writer,
+                    "SUCCESS: Should not find unknown word in dictionary: {}\r\n",
+                    e
+                )
+                .unwrap();
+            }
+        }
+
+        // Add a second word
+
+        write!(writer, "Adding second word to dictionary\r\n").unwrap();
+        let res = (functions.dict_add_word_safe)("αστέρι", &[Flag::Immediate]);
+
+        match res {
+            Ok(()) => {
+                write!(
+                    writer,
+                    "SUCCESS: Succeeded adding second word to dictionary\r\n"
+                )
+                .unwrap();
+            }
+            Err(e) => {
+                write!(
+                    writer,
+                    "FAILURE: Failed adding second word to dictionary: {}\r\n",
+                    e
+                )
+                .unwrap();
+            }
+        }
+
+        // Make sure the first word is there
+        let res = (functions.dict_find_safe)("STAR");
+
+        match res {
+            Ok(_v) => {
+                write!(
+                    writer,
+                    "SUCCESS: Succeeded finding first added word in dictionary\r\n"
+                )
+                .unwrap();
+            }
+            Err(e) => {
+                write!(
+                    writer,
+                    "FAILURE: Failed finding first added word in dictionary: {}\r\n",
+                    e
+                )
+                .unwrap();
+            }
+        }
+
+        // Make sure the second hidden word can't be found
+        let word = "αστέρι";
+        let res = (functions.dict_find_safe)(word);
+
+        match res {
+            Ok(w) => {
+                write!(
+                    writer,
+                    "SUCCESS: Succeeded finding second immediate word {} in dictionary\r\n",
+                    word
+                )
+                .unwrap();
+                // Double check the word is a match
+                for (i, c) in word.chars().enumerate() {
+                    assert_eq!(c as u32, w.word[i]);
+                }
+                // Double check the length of the immediate word
+                assert_eq!(w.length, 6);
+                // Double check the flag is set
+                assert!((*w.flags).contains(&Flag::Immediate));
+            }
+            Err(e) => {
+                write!(
+                    writer,
+                    "FAILURE: Failed finding second immediate word {} in dictionary: {}\r\n",
+                    word, e
+                )
+                .unwrap();
+            }
+        }
+
+        // Double check to make sure it doesn't find junk
+        let res = (functions.dict_find_safe)("TEST");
+
+        match res {
+            Ok(_v) => {
+                write!(
+                    writer,
+                    "FAILURE: Should not find unknown word in dictionary\r\n"
+                )
+                .unwrap();
+            }
+            Err(e) => {
+                write!(
+                    writer,
+                    "SUCCESS: Should not find unknown word in dictionary: {}\r\n",
+                    e
+                )
+                .unwrap();
+            }
+        }
+    }
+
     /// Test that adding a word that is too long fails
     pub fn test_dict_add_word_too_long_fails(
         writer: &mut dyn Write,
@@ -773,7 +942,7 @@ pub mod tests {
                     0x661F, word[0], 0x661F, word[1]
                 )
                 .unwrap();
-                assert_eq!(c.flags & 0x1F, 0x02);
+                assert_eq!(c.length, 0x02);
                 assert_eq!(word[0], 0x661F);
                 assert_eq!(word[1], 0x661F);
             }

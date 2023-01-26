@@ -316,12 +316,26 @@ pub fn dict_find_safe(word: &str) -> Result<Word, Error> {
 
     match result {
         0 => {
-            let word_len = unsafe { *(((res as usize) + 4) as *const u8) };
+            let word_flags_and_len = unsafe { *(((res as usize) + 4) as *const u8) };
+            let word_len = word_flags_and_len & 0x1F;
+            let flags: &[Flag] = match word_flags_and_len & 0xE0 {
+                0xE0 => &[Flag::Hidden, Flag::Immediate],
+                0xC0 => &[Flag::Immediate],
+                0xA0 => &[Flag::Hidden, Flag::Immediate],
+                0x80 => &[Flag::Immediate],
+                0x60 => &[Flag::Hidden],
+                0x40 => &[],
+                0x20 => &[Flag::Hidden],
+                0x00 => &[],
+                _ => &[],
+            };
+
             let word_ptr = ((res as usize) + 5) as *const u32;
             let slice = unsafe { core::slice::from_raw_parts(word_ptr, word_len as usize) };
             Ok(Word {
                 link: res as u32,
-                flags: word_len,
+                length: word_len,
+                flags,
                 word: slice,
             })
         }
