@@ -69,12 +69,16 @@ pub static mut FORTH_DICTIONARY: [u8; 1024] = [0; 1024];
 extern "C" {
     // Stack functions
     /// Initialize the stack
-    pub fn jjforth_stack_init(memory_start: u32, stack_bottom: u32);
+    pub fn jjforth_stack_init(memory_start: *mut u32, stack_bottom: *const u32);
 
     /// Pop a value from the stack
-    pub fn jjforth_stack_pop(data: &mut u32) -> u32;
+    /// data is a pointer to a variable to contain the returned data
+    /// The function returns a u32 value indicating the error code
+    pub fn jjforth_stack_pop(data: *mut u32) -> u32;
 
     /// Push a value onto the stack
+    /// The value to be pushed should be in value
+    /// It returns a u32 value indicating the error code
     pub fn jjforth_stack_push(value: u32) -> u32;
 
     /// Initialize the Forth system
@@ -84,7 +88,7 @@ extern "C" {
     pub fn jjforth_get_stack_bottom() -> u32;
 
     /// Initialize the buffer
-    pub fn jjforth_buffer_init(buffer_start: u32, buffer_end: u32);
+    pub fn jjforth_buffer_init(buffer_start: *mut u32, buffer_end: *const u32);
 
     /// Clear / empty the buffer
     pub fn jjforth_buffer_clear();
@@ -124,11 +128,16 @@ extern "C" {
 // the architecture-dependent crates.
 
 /// Initialize the stacks
-pub fn stack_init_safe(memory_start: u32, stack_bottom: u32) {
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn stack_init_safe(memory_start: *mut u32, stack_bottom: *const u32) {
     unsafe { jjforth_stack_init(memory_start, stack_bottom) }
 }
 
-/// Wrapper to pop a value from the stack
+/// Wrapper to pop a value from the stack.
+/// This function pops a value from the stack and returns a Result
+/// with the popped value.
+/// It fails with a StackUnderflow error if there is no data available
+/// on the stack.
 pub fn stack_pop_safe() -> Result<u32, boop::error::Error> {
     let mut data: u32 = 0x79327523;
     let res = unsafe { jjforth_stack_pop(&mut data) };
@@ -165,7 +174,8 @@ pub fn get_stack_bottom_safe() -> u32 {
 }
 
 /// Initialize the buffer
-pub fn buffer_init_safe(buffer_start: u32, buffer_end: u32) {
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn buffer_init_safe(buffer_start: *mut u32, buffer_end: *const u32) {
     unsafe { jjforth_buffer_init(buffer_start, buffer_end) }
 }
 

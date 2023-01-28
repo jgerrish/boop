@@ -17,7 +17,7 @@ pub struct StackSettings {
 /// This is primarily used to make testing easier
 pub struct StackFunctions {
     /// The stack initialization function
-    pub init: fn(u32, u32),
+    pub init: fn(*mut u32, *const u32),
     /// The push function for the stack
     pub push: fn(u32) -> core::result::Result<(), Error>,
     /// The pop function for the stack
@@ -66,16 +66,18 @@ impl<'a> Stack<'a> {
 }
 
 /// Initialize the stacks
-pub fn stack_init_safe(stack_init: fn(u32, u32), memory_start: u32, stack_bottom: u32) {
+pub fn stack_init_safe(
+    stack_init: fn(*mut u32, *const u32),
+    memory_start: *mut u32,
+    stack_bottom: *const u32,
+) {
     stack_init(memory_start, stack_bottom)
 }
 
 /// Run the stack tests
 pub fn run_tests(stack: &mut Stack) {
     // Initialize the return and parameter stacks
-    write!(stack.writer, "before stack init\r\n").unwrap();
     tests::test_stack_init_works(stack);
-    write!(stack.writer, "after stack init\r\n").unwrap();
 
     let return_stack_bottom_res = tests::get_stack_bottom_test(stack);
 
@@ -98,16 +100,16 @@ pub fn run_tests(stack: &mut Stack) {
 /// Test the stack code
 #[allow(unused_imports)]
 pub mod tests {
-    use crate::stack::Stack;
+    use crate::{stack::Stack, tests::write_test_result};
     use core::{arch::asm, fmt::Write};
 
     /// Test initialization of the Forth system
     /// The return stack should be set to the value RETURN_STACK_BOTTOM
     /// is set to in the ELF binary sections
     pub fn test_stack_init_works(stack: &mut Stack) {
-        let mut stack_pointer: u32;
-        let mut stack_addr: u32;
-        let stack_bottom: u32 = stack.settings.stack_bottom as u32;
+        let mut stack_pointer: *const u32;
+        let mut stack_addr: *mut u32;
+        let stack_bottom: *const u32 = stack.settings.stack_bottom as *const u32;
 
         write!(stack.writer, "Testing stack_init works\r\n").unwrap();
 
@@ -122,7 +124,7 @@ pub mod tests {
         write!(
             stack.writer,
             "The Forth memory starts at 0x{:X}\r\n",
-            stack_addr
+            stack_addr as u32
         )
         .unwrap();
 
@@ -135,7 +137,7 @@ pub mod tests {
         write!(
             stack.writer,
             "Current value of stack pointer: 0x{:X}\r\n",
-            stack_pointer
+            stack_pointer as u32
         )
         .unwrap();
 
@@ -147,12 +149,12 @@ pub mod tests {
                 out(reg) stack_pointer,
                 options(nomem, nostack, preserves_flags));
         }
-        write!(
+        write_test_result(
             stack.writer,
-            "Current value of stack pointer: 0x{:X}\r\n",
-            stack_pointer
-        )
-        .unwrap();
+            stack_pointer == stack_addr,
+            "current value of stack pointer should equal expected",
+        );
+        assert_eq!(stack_pointer, stack_addr);
     }
 
     /// Test that pushing a value onto the return stack works
@@ -272,18 +274,18 @@ pub mod tests {
         )
         .unwrap();
 
+        let mut passed = false;
         if let Ok(r) = res {
-            write!(
-                stack.writer,
-                "res: 0x{:X}, test_val: 0x{:X}\r\n",
-                r, test_val
-            )
-            .unwrap();
-            assert_eq!(r, test_val);
-        } else {
-            write!(stack.writer, "res: Err(()), test_val: 0x{:X}\r\n", test_val).unwrap();
-            panic!();
+            if r == test_val {
+                passed = true;
+            }
         }
+        write_test_result(
+            stack.writer,
+            passed,
+            "current value of stack pointer should equal expected",
+        );
+        assert!(passed);
     }
 
     /// Test that popping two values from the stack works.

@@ -53,12 +53,11 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 /// Run the buffer tests
 fn run_buffer_tests(writer: &mut dyn Write) {
     // Get the return stack address from the memory layout
-    let buffer_addr: u32 = unsafe { boop_stm32f1::FORTH_BUFFER.as_ptr() as u32 };
-    write!(writer, "buffer_addr in Rust: 0x{:X}\r\n", buffer_addr).unwrap();
+    let buffer_addr = unsafe { boop_stm32f1::FORTH_BUFFER.as_ptr() as *mut u32 };
 
-    let buffer_size: u32 = unsafe { boop_stm32f1::FORTH_BUFFER.len() as u32 };
+    let buffer_size = unsafe { boop_stm32f1::FORTH_BUFFER.len() };
 
-    let buffer_end: u32 = buffer_addr + buffer_size - 4;
+    let buffer_end: *const u32 = (buffer_addr as usize + buffer_size - 4) as *const u32;
 
     let mut buffer = Buffer::new(
         writer,
@@ -96,9 +95,7 @@ fn run_tests(writer: &mut dyn Write) {
 
     write!(writer, "FORTH_RETURN_STACK: 0x{:X}\r\n", return_stack_addr).unwrap();
 
-    write!(writer, "before start\r\n").unwrap();
     boop::tests::test_start_works(writer, start_safe);
-    write!(writer, "after start\r\n").unwrap();
 
     let mut stack = Stack {
         writer,
@@ -113,8 +110,6 @@ fn run_tests(writer: &mut dyn Write) {
             get_stack_bottom_safe,
         },
     };
-
-    write!(stack.writer, "After stack_init\r\n").unwrap();
 
     boop::stack::run_tests(&mut stack);
 

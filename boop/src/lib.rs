@@ -43,6 +43,22 @@ pub fn configure_mpu(writer: &mut dyn Write, mpu: &cortex_m::peripheral::MPU) {
 pub mod tests {
     use core::{arch::asm, fmt::Write};
 
+    /// Write a test result status and message about the test
+    ///
+    /// writer is the trait object to write to
+    /// test_result is the result of the test:
+    ///   if it was true the test was successful
+    ///   if it was false the test was a failure
+    /// status_msg is a string describing the test
+    pub fn write_test_result(writer: &mut dyn Write, test_result: bool, status_msg: &str) {
+        if test_result {
+            write!(writer, "SUCCESS").unwrap();
+        } else {
+            write!(writer, "FAILURE").unwrap();
+        }
+        write!(writer, " {}\r\n", status_msg).unwrap();
+    }
+
     /// Test initialization of the Forth system
     /// The return stack should be set to the value RETURN_STACK_BOTTOM
     /// is set to in the ELF binary sections
