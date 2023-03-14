@@ -1,4 +1,5 @@
 //! Test driver for ARM assembly code that is compatible with QEMU
+#![warn(missing_docs)]
 #![allow(clippy::empty_loop)]
 #![no_main]
 #![no_std]
@@ -52,27 +53,32 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 
 /// Run the buffer tests
 fn run_buffer_tests(writer: &mut dyn Write) {
-    // Get the return stack address from the memory layout
-    let buffer_addr = unsafe { boop_stm32f1::FORTH_BUFFER.as_ptr() as *mut u32 };
+    // Create a test buffer.
+    //
+    // In the normal program, we might use statics and lock them for
+    // the duration of their use, for example during serial interrupt
+    // routines.  For the test use case, we can just create a temporary
+    // buffer scoped to the test function.
 
-    let buffer_size = unsafe { boop_stm32f1::FORTH_BUFFER.len() };
+    // POSSIBLE BUG: This doesn't work as expected.
+    // It overwrites the FORTH_RETURN_STACK allocation in the crate
+    // global scope.
+    // #[link_section = ".ram2bss"]
+    // static mut forth_test_buffer: [u32; 256] = [0; 256];
 
-    let buffer_end: *const u32 = (buffer_addr as usize + buffer_size - 4) as *const u32;
+    let mut array: [u32; 256] = [0; 256];
 
     let mut buffer = Buffer::new(
         writer,
-        boop::buffer::BufferSettings {
-            buffer_addr,
-            buffer_size,
-            buffer_end,
-        },
+        &mut array,
         boop::buffer::BufferFunctions {
             buffer_init_safe,
             buffer_clear_safe,
             buffer_write_word_safe,
             buffer_read_word_safe,
         },
-    );
+    )
+    .unwrap();
 
     boop::buffer::run_tests(&mut buffer);
 }

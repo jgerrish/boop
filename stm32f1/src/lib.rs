@@ -5,6 +5,7 @@
 #![no_std]
 
 use boop::{
+    buffer::BufferStruct,
     dict::{Flag, Word},
     error::Error,
 };
@@ -44,7 +45,7 @@ pub static mut FORTH_PARAMETER_STACK: [u8; 2048] = [0; 2048];
 /// type size is four bytes, then the number of items that can be
 /// stored is 255, not 256.
 #[link_section = ".ram2bss"]
-pub static mut FORTH_BUFFER: [u8; 1024] = [0; 1024];
+pub static mut FORTH_BUFFER: [u32; 256] = [0; 256];
 
 /// temporary buffer to store UTF-32 encoded strings
 #[link_section = ".ram2bss"]
@@ -88,16 +89,20 @@ extern "C" {
     pub fn jjforth_get_stack_bottom() -> u32;
 
     /// Initialize the buffer
-    pub fn jjforth_buffer_init(buffer_start: *mut u32, buffer_end: *const u32);
+    pub fn jjforth_buffer_init(
+        buffer: *const BufferStruct,
+        buffer_start: *const u32,
+        buffer_end: *const u32,
+    ) -> u32;
 
     /// Clear / empty the buffer
-    pub fn jjforth_buffer_clear();
+    pub fn jjforth_buffer_clear(buffer: *const BufferStruct) -> u32;
 
     /// Write a single byte to the input buffer
-    pub fn jjforth_buffer_write(word: u32) -> u32;
+    pub fn jjforth_buffer_write(buffer: *const BufferStruct, word: u32) -> u32;
 
     /// Read a single byte from the input buffer
-    pub fn jjforth_buffer_read(data: &mut u32) -> u32;
+    pub fn jjforth_buffer_read(buffer: *const BufferStruct, data: &mut u32) -> u32;
 
     // Dictionary functions
 
@@ -174,45 +179,119 @@ pub fn get_stack_bottom_safe() -> u32 {
 }
 
 /// Initialize the buffer
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn buffer_init_safe(buffer_start: *mut u32, buffer_end: *const u32) {
-    unsafe { jjforth_buffer_init(buffer_start, buffer_end) }
+///
+/// # Safety
+///
+/// The caller must ensure that the BufferStruct pointer points to a
+/// valid BufferStruct structure.
+/// The caller must ensure that buffer_start and buffer_end are valid
+/// pointers to elements in an array and that buffer_end is greater
+/// than or equal to buffer_start.
+///
+pub unsafe fn buffer_init_safe(
+    buffer: *const BufferStruct,
+    buffer_start: *const u32,
+    buffer_end: *const u32,
+) -> Result<(), boop::buffer::Error> {
+    let res = unsafe { jjforth_buffer_init(buffer, buffer_start, buffer_end) };
+
+    match res {
+        0 => Ok(()),
+        1 => Err(boop::buffer::Error::new(
+            boop::buffer::ErrorKind::NullPointer,
+        )),
+        _ => Err(boop::buffer::Error::new(boop::buffer::ErrorKind::Unknown)),
+    }
 }
 
 /// Clear / empty the buffer
-pub fn buffer_clear_safe() {
-    unsafe { jjforth_buffer_clear() }
+///
+/// # Safety
+///
+/// The caller must ensure that the BufferStruct pointer points to a
+/// valid BufferStruct structure.
+///
+pub unsafe fn buffer_clear_safe(buffer: *const BufferStruct) -> Result<(), boop::buffer::Error> {
+    let res = unsafe { jjforth_buffer_clear(buffer) };
+
+    match res {
+        0 => Ok(()),
+        1 => Err(boop::buffer::Error::new(
+            boop::buffer::ErrorKind::NullPointer,
+        )),
+        _ => Err(boop::buffer::Error::new(boop::buffer::ErrorKind::Unknown)),
+    }
 }
 
 /// Write to the input buffer
-pub fn buffer_write_safe(data: &[u32]) -> Result<(), boop::buffer::Error> {
+///
+/// # Safety
+///
+/// The caller must ensure that the BufferStruct pointer points to a
+/// valid BufferStruct structure.
+///
+pub unsafe fn buffer_write_safe(
+    buffer: *const BufferStruct,
+    data: &[u32],
+) -> Result<(), boop::buffer::Error> {
     for word in data {
-        let res = unsafe { jjforth_buffer_write(*word) };
+        let res = unsafe { jjforth_buffer_write(buffer, *word) };
         match res {
             0 => continue,
-            _ => return Err(boop::buffer::Error::new(boop::buffer::ErrorKind::Full)),
+            1 => {
+                return Err(boop::buffer::Error::new(
+                    boop::buffer::ErrorKind::NullPointer,
+                ))
+            }
+            2 => return Err(boop::buffer::Error::new(boop::buffer::ErrorKind::Full)),
+            _ => return Err(boop::buffer::Error::new(boop::buffer::ErrorKind::Unknown)),
         }
     }
     Ok(())
 }
 
 /// Write to the input buffer
-pub fn buffer_write_word_safe(data: u32) -> Result<(), boop::buffer::Error> {
-    let res = unsafe { jjforth_buffer_write(data) };
+///
+/// # Safety
+///
+/// The caller must ensure that the BufferStruct pointer points to a
+/// valid BufferStruct structure.
+///
+pub unsafe fn buffer_write_word_safe(
+    buffer: *const BufferStruct,
+    data: u32,
+) -> Result<(), boop::buffer::Error> {
+    let res = unsafe { jjforth_buffer_write(buffer, data) };
     match res {
         0 => Ok(()),
-        _ => Err(boop::buffer::Error::new(boop::buffer::ErrorKind::Full)),
+        1 => Err(boop::buffer::Error::new(
+            boop::buffer::ErrorKind::NullPointer,
+        )),
+        2 => Err(boop::buffer::Error::new(boop::buffer::ErrorKind::Full)),
+        _ => Err(boop::buffer::Error::new(boop::buffer::ErrorKind::Unknown)),
     }
 }
 
 /// Read from the input buffer
-pub fn buffer_read_word_safe() -> Result<u32, boop::buffer::Error> {
+///
+/// # Safety
+///
+/// The caller must ensure that the BufferStruct pointer points to a
+/// valid BufferStruct structure.
+///
+pub unsafe fn buffer_read_word_safe(
+    buffer: *const BufferStruct,
+) -> Result<u32, boop::buffer::Error> {
     let mut error_code: u32 = 0;
 
-    let res = unsafe { jjforth_buffer_read(&mut error_code) };
+    let res = unsafe { jjforth_buffer_read(buffer, &mut error_code) };
     match error_code {
         0 => Ok(res),
-        _ => Err(boop::buffer::Error::new(boop::buffer::ErrorKind::Empty)),
+        1 => Err(boop::buffer::Error::new(
+            boop::buffer::ErrorKind::NullPointer,
+        )),
+        2 => Err(boop::buffer::Error::new(boop::buffer::ErrorKind::Empty)),
+        _ => Err(boop::buffer::Error::new(boop::buffer::ErrorKind::Unknown)),
     }
 }
 

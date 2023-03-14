@@ -12,17 +12,45 @@
    It was built as part of a project to investigate Forth on
    embedded devices.
 
+   Diagram of the buffer (inspired by the jonesforth Forth compiler)
+   after putting five 32-bit width characters: H e l l o.
+   Each of these elements holds 32-bits.
+
+        start                                   end
+          |                                      |
+          V                                      V
+        +------------------------------------------+
+        | H | e | l | l | o |   | .. unused .. | X |
+        +------------------------------------------+
+	  ^                   ^
+	  |                   |
+       currkey             bufftop
+
+   The X represents a location where data can't be stored.
+   That element is a valid memory location, and the end pointer
+   points to it, but it isn't used for storage.
+
+   To help increase code readability and decrease cognitive load, the
+   same registers were used throughout this file to refer to each
+   queue pointer.
+
+   First, r4 is used as the first argument, the pointer to the
+   queue structure.  It is aliased as rbuf.
+
+   The following registers are used as pointers:
+
+   r7:  start
+   r8:  end
+   r9:  currkey
+   r10: bufftop
+
    Safety
    ------
 
    It has not been fully tested.  Don't use it in production code.
 
-   It's also not optimized.  It uses a set of globals to store queue
-   start, end and current positions. instead of using parameters or
-   registers to manage that information for the lifetime of the
-   application.  And the register usage is not standardized or
-   consistent, but should work with systems using the standard ARM
-   ABI.
+   The register usage should work with systems using the standard
+   GCC ARM ABI.
 
    It is also not thread-safe.  Some protections have been added,
    but there are still edge-cases and it hasn't been fully reviewed.
@@ -37,13 +65,55 @@
 .syntax unified
 .text
 
-.globl jjforth_buffer_init, jjforth_buffer_clear, jjforth_buffer_write, jjforth_buffer_read, jjforth_buffer_reset
+.globl jjforth_buffer_init, jjforth_buffer_clear, jjforth_buffer_write, jjforth_buffer_read, jjforth_buffer_size
 
-/* Initialize the buffer */
 
-/* Because jjforth_buffer_start, jjforth_buffer_end, bufftop and currkey all depend on
-   each other, we need to have a higher-level mutex that coordinates
-   access to all of them.
+/*
+ * The following offsets describe the fields of the buffer structure
+ * passed into the buffer functions.
+ */
+
+/* The start of the buffer, a pointer to the first address */
+.set BUFFER_START_OFFSET, 0
+/* The end of the buffer, a pointer to the last address */
+.set BUFFER_END_OFFSET, 4
+/*
+ * The currkey points to the next object to read.  It's equivalent to
+ * the head in some queue definitions.
+ */
+.set BUFFER_CURRKEY_OFFSET, 8
+/*
+ * The bufftop points to the address to write the next object.  It's equivalent to
+ * the tail in some queue definitions.
+ */
+.set BUFFER_BUFFTOP_OFFSET, 12
+
+/* Set up some register aliases to hopefully make this code easier to follow and
+   be more consistent in register usage. */
+rbuf .req r4			/* Buffer structure address */
+
+/* Initialize the buffer
+
+   This should be the first subroutine you call before using the
+   buffer.
+
+   The buffer expects an array or contiguous region of memory to store
+   items in.  Most of the functions take a structure with pointers
+   into this array as the first argument.  The structure looks like
+   this in C:
+
+   struct buffer {
+     uint32_t *start,
+     uint32_t *end,
+     uint32_t *currkey,
+     uint32_t *bufftop
+   };
+
+   The first parameter is a pointer to a buffer structure.
+
+   Return:
+     0 for success.
+     1 for a null pointer exception
 */
 jjforth_buffer_init:
 	/* We use Rust as a test driver and for easy access to runtime
@@ -58,212 +128,237 @@ jjforth_buffer_init:
            Inline assembly - The Rust Reference
            https://doc.rust-lang.org/reference/inline-assembly.html
         */
-	push { r6, r7, r9, r11 }
+	push { r1, r2, rbuf, r6, r7, r9, r11 }
 
-	ldr r3, =jjforth_buffer_start
-	str r0, [r3]
+	cmp r0, #0
+	beq jjforth_buffer_init_null_pointer
 
-	ldr r3, =currkey
-	str r0, [r3]
-	ldr r3, =bufftop
-	str r0, [r3]
-	ldr r3, =jjforth_buffer_end
-	str r1, [r3]
+	mov rbuf, r0		/* Copy the structure pointer to rbuf */
 
-	pop { r6, r7, r9, r11 }
+	str r1, [rbuf, #BUFFER_START_OFFSET]
+	str r2, [rbuf, #BUFFER_END_OFFSET]
+	str r1, [rbuf, #BUFFER_CURRKEY_OFFSET]
+	str r1, [rbuf, #BUFFER_BUFFTOP_OFFSET]
+
+	mov r0, #0
+	b jjforth_buffer_init_done
+
+jjforth_buffer_init_null_pointer:
+	mov r0, #1
+	b jjforth_buffer_init_done
+
+jjforth_buffer_init_done:
+	pop { r1, r2, rbuf, r6, r7, r9, r11 }
 
 	bx lr
 
 /* Write data to the buffer or add an item to the queue.
 
-   The first parameter should be the item to add.
+   The first parameter is a pointer to the buffer structure.
+   The second parameter should be the item to add. as a 32-bit word.
 
    On success, returns a zero.  On failure returns a non-zero value.
+
+   Return:
+     0 for success.
+     1 for a null pointer exception
+     2 if the buffer is full.
 */
 jjforth_buffer_write:
-	push { r6, r7, r9, r11 }
+	push { rbuf, r6, r7, r8, r9, r10, r11, r12 }
 
-	ldr r9, =bufftop
+	cmp r0, #0
+	beq jjforth_buffer_write_null_pointer
 
-	ldr r1, [r9]
-	mov r12, r1		/* copy bufftop into r12, to use for storing the data */
-	ldr r3, =jjforth_buffer_end
-	ldr r2, [r3]
+	mov rbuf, r0
+	ldr r10, [rbuf, #BUFFER_BUFFTOP_OFFSET]
+	mov r12, r10		/* copy bufftop into r12, to use for storing the data */
+	ldr r8, [rbuf, #BUFFER_END_OFFSET]
 
 	/* Check if bufftop is equal to jjforth_buffer_end */
-	cmp r1, r2
+	cmp r10, r8
 	/* Here's the condition code using an it instruction block */
 #ifdef IT_INSTRUCTION
-	iteee ne
+	itee ne
 	/* If we don't need to wrap */
-	addne r1, r1, #4
+	addne r10, r10, #4
 	/* If we need to wrap */
-	ldreq r3, =jjforth_buffer_start
-	ldreq r8, [r3]
-	moveq r1, r8
+	ldreq r7, [rbuf, #BUFFER_START_OFFSET]
+	moveq r10, r7
 	/* End of it instruction block */
 #else
 	/* here's the code using normal branch instructions */
 	beq jjforth_buffer_write_wrap
-        add r1, r1, #4
+        add r10, r10, #4
 	b jjforth_buffer_write_check
 jjforth_buffer_write_wrap:
-	ldr r3, =jjforth_buffer_start
-	ldr r8, [r3]
-	mov r1, r8
+	ldr r7, [rbuf, #BUFFER_START_OFFSET]
+	mov r10, r7
 	b jjforth_buffer_write_check
 	/* End of comparison and branch block */
 #endif
 
 jjforth_buffer_write_check:
-	ldr r10, =currkey
-	ldr r11, [r10]
-	cmp r1, r11
+	ldr r9, [rbuf, #BUFFER_CURRKEY_OFFSET]
+	cmp r10, r9
 
 #ifdef IT_INSTRUCTION
 	ittte ne
 	/* If there is space available */
-	strne r0, [r12]		/* Write the data to the saved bufftop index */
-	strne r1, [r9]		/* update the bufftop with the new bufftop index  */
+	strne r1, [r12]		/* Write the data to the saved bufftop index */
+	/* update the bufftop with the new bufftop index  */
+	strne r10, [rbuf, #BUFFER_BUFFTOP_OFFSET]
 	movne r0, #0		/* return a successful status code */
 	/* If there is not space available */
-	moveq r0, #1		/* return an unsuccessful status code */
+	moveq r0, #2		/* return an unsuccessful status code */
 #else
 	beq jjforth_buffer_write_full
 	/* We're safe to write the data */
-	str r0, [r12]           /* Write the data to the saved bufftop index */
-	str r1, [r9]	/* update the bufftop with the new bufftop index  */
+	str r1, [r12]           /* Write the data to the saved bufftop index */
+	/* update the bufftop with the new bufftop index  */
+	str r10, [rbuf, #BUFFER_BUFFTOP_OFFSET]
 
 	mov r0, #0		/* return a successful status code */
 	b jjforth_buffer_write_done
 jjforth_buffer_write_full:
-	mov r0, #1		/* return an unsuccessful status code */
+	mov r0, #2		/* return an unsuccessful status code */
 	b jjforth_buffer_write_done
 #endif
+	/* For the IT instruction block */
+	b jjforth_buffer_write_done
+
+jjforth_buffer_write_null_pointer:
+	mov r0, #1
+	b jjforth_buffer_write_done
 
 jjforth_buffer_write_done:
-	pop { r6, r7, r9, r11 }
+	pop { rbuf, r6, r7, r8, r9, r10, r11, r12 }
 
 	bx lr
 
-/*
-   Read data from the buffer
+/* Read data from the buffer
 
-   This function expects a single argument, a reference to a buffer to
-   fill with the data read.  It returns an error code indicating whether
-   the read was successful.  On success, a zero is returned and the
-   referenced variable contains valid data.  On failure, a non-zero value
-   is returned and the data is unspecified.  (It's set to one in this
-   version, but that is subject to change).
+   This function expects two arguments.
+   The first parameter is a pointer to the buffer structure.
+   The second parameter should be a reference to a result code to
+   fill with the result of the read.
+
+   Error code:
+    0 for success
+    1 for a null pointer exception
+    2 if the buffer is empty
+
+   Return:
+     It returns the data read if it was successful, as a 32-bit word.
 */
 jjforth_buffer_read:
-	push { r6, r7, r9, r11 }
+	push { rbuf, r6, r7, r8, r9, r10, r11 }
 
-	ldr r9, =jjforth_buffer_start
-	ldr r10, [r9]
-	ldr r9, =jjforth_buffer_end
-	ldr r1, [r9]
-	ldr r11, =currkey
+	cmp r0, #0
+	beq jjforth_buffer_read_null_pointer
 
-	ldr r2, [r11]
-	ldr r9, =bufftop
-	ldr r3, [r9]
+	mov rbuf, r0	      /* Copy the structure pointer to rbuf */
+
+	ldr r7, [rbuf, #BUFFER_START_OFFSET]
+	ldr r8, [rbuf, #BUFFER_END_OFFSET]
+
+	ldr r9, [rbuf, #BUFFER_CURRKEY_OFFSET]
+	ldr r10, [rbuf, #BUFFER_BUFFTOP_OFFSET]
 
 	/* Check if there's any data to read.
            If currkey != bufftop, there is data to read.
         */
-	cmp r2, r3
+	cmp r9, r10
 	beq jjforth_buffer_read_empty
 
-	mov r10, #0
-	str r10, [r0] 		/* store to first parameter */
-	ldr r0, [r2]		/* read the next piece of data */
+	/* Read the data */
+	ldr r0, [r9]		/* read the next piece of data */
 
-	/* Advance the current key pointer */
-	cmp r9, r3		/* Check if currkey is at the end of the buffer */
+	/* Check if currkey is at the end of the buffer */
+	cmp r10, r8
 
 #ifdef IT_INSTRUCTION
 	ittee ne
+	/* Start of it block */
 	/* If we don't need to wrap to the beginning of the buffer */
-	addne r2, r2, #4
-	strne r2, [r11]
+	addne r9, r9, #4
+	strne r9, [rbuf, #BUFFER_CURRKEY_OFFSET]
 	/* If we need to wrap to the beginning of the buffer */
-	moveq r2, r10
-	streq r2, [r11]
+	moveq r9, r7
+	streq r9, [rbuf, #BUFFER_CURRKEY_OFFSET]
 	/* End of it block */
-	b jjforth_buffer_read_done
 #else
 	beq jjforth_buffer_read_wrap
-	add r2, r2, #4
-	str r2, [r11]
-
-	b jjforth_buffer_read_done
+	add r9, r9, #4
+	str r9, [rbuf, #BUFFER_CURRKEY_OFFSET]
 #endif
+	b jjforth_buffer_read_success
 
 jjforth_buffer_read_wrap:
-	mov r2, r10
-	str r2, [r11]
+	mov r9, r7
+	str r9, [rbuf, #BUFFER_CURRKEY_OFFSET]
 
-	b jjforth_buffer_read_done
+	b jjforth_buffer_read_success
 
 jjforth_buffer_read_empty:
-	mov r10, #1
-	str r10, [r0] 		/* store to first parameter */
-	mov r0, r10		/* set the return value */
+	mov r11, #2
+	str r11, [r1] 		/* store to first parameter */
+	mov r0, r11		/* set the return value */
+	b jjforth_buffer_read_done
+
+jjforth_buffer_read_null_pointer:
+	mov r11, #1
+	str r11, [r1]
+	mov r0, r11
+	b jjforth_buffer_read_done
+
+jjforth_buffer_read_success:
+	mov r11, #0
+	str r11, [r1] 		/* store to first parameter */
+
 	b jjforth_buffer_read_done
 
 jjforth_buffer_read_done:
-	mov r11, #1		/* It doesn't matter what we store in currkey,
-                                   so just use 1. */
-	pop { r6, r7, r9, r11 }
+	pop { rbuf, r6, r7, r8, r9, r10, r11 }
 
 	bx lr
 
 
-/* Clear the buffer */
+/* Clear the buffer
+
+   The first parameter is a pointer to the buffer structure.
+
+   Return:
+     0 for success.
+     1 for a null pointer exception
+*/
 jjforth_buffer_clear:
-	push { r6, r7, r9, r11 }
-	ldr r3, =jjforth_buffer_start	/* Load the address of the jjforth_buffer_start variable */
-	ldr r0, [r3]		/* Load the start of the buffer in general register r0 */
+	push { rbuf, r6, r7, r9, r11 }
+
+	cmp r0, #0
+	beq jjforth_buffer_clear_null_pointer
+
+	mov rbuf, r0
+
+	/* Load the start of the buffer in general register r0 */
+	ldr r7, [rbuf, #BUFFER_START_OFFSET]
 
 	/* reset the read pointer to the beginning of the buffer */
-	ldr r3, =currkey
-	str r0, [r3]
+	str r7, [rbuf, #BUFFER_CURRKEY_OFFSET]
 
 	/* reset the write pointer to the beginning of the buffer */
-	ldr r3, =bufftop
-	str r0, [r3]
+	str r7, [rbuf, #BUFFER_BUFFTOP_OFFSET]
 
-	mov r11, #1		/* It doesn't matter what we store in jjforth_buffer_lock,
-                                   so just use 1. */
-	pop { r6, r7, r9, r11 }
+	mov r0, #0
+
+	b jjforth_buffer_clear_done
+
+
+jjforth_buffer_clear_null_pointer:
+	mov r0, #1
+	b jjforth_buffer_clear_done
+
+jjforth_buffer_clear_done:
+	pop { rbuf, r6, r7, r9, r11 }
 
 	bx lr
-
-
-/* Start of data section and variables */
-	.data
-	.align 4
-
-
-/* This data should be protected if locks are implemented
-   The locations of these variables should be safe through the
-   lifetime of the program.
-
-   The contents of the jjforth_buffer_start and jjforth_buffer_end may change when the
-   queue is initialized, but not by read or write.
-
-   The contents of currkey and bufftop change when the buffer is
-   initialized.  bufftop is changed when the buffer is written.
-   currkey is changed when the buffer is read.  They are both changed
-   when the buffer is cleared.
-*/
-jjforth_buffer_start:
-	.int 0
-jjforth_buffer_end:
-	.int 0
-currkey:
-	.int 0 			/* Current place in input buffer (next character to read). */
-bufftop:
-	.int 0		        /* Last valid data in input buffer + 1. */
-
