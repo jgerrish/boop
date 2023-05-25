@@ -8,7 +8,10 @@ use core::fmt::Write;
 
 use stm32f1xx_hal as _;
 
-use boop::{buffer::Buffer, stack::Stack};
+use boop::{
+    buffer::{Buffer, BufferTester},
+    stack::Stack,
+};
 
 use boop_stm32f1::{
     buffer_clear_safe, buffer_init_safe, buffer_read_word_safe, buffer_write_word_safe,
@@ -68,8 +71,7 @@ fn run_buffer_tests(writer: &mut dyn Write) {
 
     let mut array: [u32; 256] = [0; 256];
 
-    let mut buffer = Buffer::new(
-        writer,
+    let buffer = Buffer::new(
         &mut array,
         boop::buffer::BufferFunctions {
             buffer_init_safe,
@@ -80,7 +82,8 @@ fn run_buffer_tests(writer: &mut dyn Write) {
     )
     .unwrap();
 
-    boop::buffer::run_tests(&mut buffer);
+    let mut buffer_tester = BufferTester { buffer, writer };
+    boop::buffer::run_tests(&mut buffer_tester);
 }
 
 fn run_tests(writer: &mut dyn Write) {

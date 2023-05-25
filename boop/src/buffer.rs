@@ -88,20 +88,26 @@ pub struct BufferFunctions {
 
 /// Circular buffer array-based implementation for a queue
 #[allow(dead_code)]
-pub struct Buffer<'a, const SIZE: usize> {
+pub struct Buffer<const SIZE: usize> {
     /// The actual buffer array
     data: *const [u32; SIZE],
     /// The native buffer pointers
     pub buffer: BufferStruct,
-    /// The output stream for writing debug and log messages
-    pub writer: &'a mut dyn Write,
     /// Settings for the buffer
     pub settings: BufferSettings,
     /// Functions for the buffer
     pub functions: BufferFunctions,
 }
 
-impl<'a, const SIZE: usize> Buffer<'a, SIZE> {
+/// Create a testing structure to run tests against a buffer
+pub struct BufferTester<'a, const SIZE: usize> {
+    /// The Buffer structure to test
+    pub buffer: Buffer<SIZE>,
+    /// The output stream for writing debug and log messages
+    pub writer: &'a mut dyn Write,
+}
+
+impl<'a, const SIZE: usize> Buffer<SIZE> {
     /// Create a new buffer
     ///
     /// This takes ownership of the array, which is owned by the new
@@ -118,10 +124,9 @@ impl<'a, const SIZE: usize> Buffer<'a, SIZE> {
     /// require a custom allocator: The Embedded Rust Book has some
     /// info on that.
     pub fn new(
-        writer: &'a mut dyn Write,
         data: &mut [u32; SIZE],
         functions: BufferFunctions,
-    ) -> core::result::Result<Buffer<'a, SIZE>, Error> {
+    ) -> core::result::Result<Buffer<SIZE>, Error> {
         // Get the buffer address
         // let buffer_addr = core::ptr::addr_of_mut!(array) as *const [u32; 256];
         let buffer_addr = data.as_ptr() as *mut u32;
@@ -141,7 +146,6 @@ impl<'a, const SIZE: usize> Buffer<'a, SIZE> {
                 currkey: core::ptr::null_mut::<u32>() as *mut u32,
                 bufftop: core::ptr::null_mut::<u32>() as *mut u32,
             },
-            writer,
             settings: BufferSettings {
                 buffer_addr,
                 buffer_len,
@@ -159,7 +163,7 @@ impl<'a, const SIZE: usize> Buffer<'a, SIZE> {
     }
 }
 
-impl<'a, const SIZE: usize> Queue for Buffer<'a, SIZE> {
+impl<'a, const SIZE: usize> Queue for Buffer<SIZE> {
     /// Initialize the buffer
     unsafe fn init(
         &mut self,
@@ -248,114 +252,114 @@ impl Debug for ErrorKind {
 }
 
 /// Run the buffer tests
-pub fn run_tests<const SIZE: usize>(buffer: &mut Buffer<SIZE>) {
+pub fn run_tests<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
     unsafe {
-        buffer
-            .init(buffer.settings.buffer_addr, buffer.settings.buffer_end)
+        buffer_tester.buffer
+            .init(buffer_tester.buffer.settings.buffer_addr, buffer_tester.buffer.settings.buffer_end)
             .unwrap();
     }
 
-    tests::test_write_word(buffer, 0x34852052);
+    tests::test_write_word(buffer_tester, 0x34852052);
 
     // reset for the next test
     unsafe {
-        buffer
-            .init(buffer.settings.buffer_addr, buffer.settings.buffer_end)
+        buffer_tester.buffer
+            .init(buffer_tester.buffer.settings.buffer_addr, buffer_tester.buffer.settings.buffer_end)
             .unwrap();
     }
 
     // Test the clear function
-    tests::test_clear_works(buffer);
+    tests::test_clear_works(buffer_tester);
 
     // reset for the next test
-    buffer.clear().unwrap();
+    buffer_tester.buffer.clear().unwrap();
 
-    tests::test_read_word(buffer, 0x34852052);
+    tests::test_read_word(buffer_tester, 0x34852052);
 
     // reset for the next test
-    buffer.clear().unwrap();
+    buffer_tester.buffer.clear().unwrap();
 
     // test that writing two words and reading two words works
-    tests::test_read_two_words_works(buffer, 0x34852052, 0x58602760);
+    tests::test_read_two_words_works(buffer_tester, 0x34852052, 0x58602760);
 
     // reset for the next test
-    buffer.clear().unwrap();
+    buffer_tester.buffer.clear().unwrap();
 
-    tests::test_read_word_empty_fails(buffer, 0x34852052);
-
-    // reset for the next test
-    buffer.clear().unwrap();
-
-    tests::test_write_and_read_after_read_fail_works(buffer, 0x34852052);
+    tests::test_read_word_empty_fails(buffer_tester, 0x34852052);
 
     // reset for the next test
-    buffer.clear().unwrap();
+    buffer_tester.buffer.clear().unwrap();
 
-    tests::test_simple_buffer_overflow_fails(buffer);
+    tests::test_write_and_read_after_read_fail_works(buffer_tester, 0x34852052);
 
     // reset for the next test
-    buffer.clear().unwrap();
+    buffer_tester.buffer.clear().unwrap();
 
-    tests::test_complex_buffer_overflow_fails(buffer, 0x34852052);
+    tests::test_simple_buffer_overflow_fails(buffer_tester);
 
-    tests::test_init_null_pointer_fails(buffer);
-    tests::test_get_null_pointer_fails(buffer);
-    tests::test_put_null_pointer_fails(buffer);
-    tests::test_clear_null_pointer_fails(buffer);
+    // reset for the next test
+    buffer_tester.buffer.clear().unwrap();
+
+    tests::test_complex_buffer_overflow_fails(buffer_tester, 0x34852052);
+
+    tests::test_init_null_pointer_fails(buffer_tester);
+    tests::test_get_null_pointer_fails(buffer_tester);
+    tests::test_put_null_pointer_fails(buffer_tester);
+    tests::test_clear_null_pointer_fails(buffer_tester);
 }
 
 /// Test the buffer code
 #[allow(unused_imports)]
 pub mod tests {
     use crate::{
-        buffer::{Buffer, BufferFunctions, BufferSettings, BufferStruct, Error, ErrorKind, Queue},
+        buffer::{Buffer, BufferFunctions, BufferSettings, BufferStruct, BufferTester, Error, ErrorKind, Queue},
         tests::write_test_result,
     };
     use core::{arch::asm, fmt::Write};
 
     /// Test that writing a buffer clears it
-    pub fn test_clear_works<const SIZE: usize>(buffer: &mut Buffer<SIZE>) {
+    pub fn test_clear_works<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
         let word: u32 = 0x23681068;
-        let res = buffer.put(word);
+        let res = buffer_tester.buffer.put(word);
         assert!(res.is_ok());
 
         // clear the buffer
-        let res = buffer.clear();
+        let res = buffer_tester.buffer.clear();
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_clear_works clear should work",
         );
 
         // Test that trying to read the word written to the buffer
         // fails after clearing
-        let res = buffer.get();
+        let res = buffer_tester.buffer.get();
         crate::tests::write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_err(),
             "test_clear_works read after clear should fail",
         );
         assert!(res.is_err());
 
         // Test that the full buffer space is available after clearing
-        let buffer_len = buffer.settings.buffer_len;
+        let buffer_len = buffer_tester.buffer.settings.buffer_len;
 
         let mut cnt = 0;
         for i in 0..buffer_len - 1 {
             cnt += 1;
-            let res = buffer.put(i as u32);
+            let res = buffer_tester.buffer.put(i as u32);
             assert!(res.is_ok());
         }
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             cnt == buffer_len - 1,
             "test_clear_works all buffer space should be available after clear",
         );
 
-        let res = buffer.put(0x69238632);
+        let res = buffer_tester.buffer.put(0x69238632);
 
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_err(),
             "test_clear_works write beyond buffer capacity should fail",
         );
@@ -364,11 +368,11 @@ pub mod tests {
     }
 
     /// Test that writing a word works
-    pub fn test_write_word<const SIZE: usize>(buffer: &mut Buffer<SIZE>, word: u32) {
-        let res = buffer.put(word);
+    pub fn test_write_word<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>, word: u32) {
+        let res = buffer_tester.buffer.put(word);
 
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_write_word put should work",
         );
@@ -376,18 +380,18 @@ pub mod tests {
     }
 
     /// Test that reading a word works
-    pub fn test_read_word<const SIZE: usize>(buffer: &mut Buffer<SIZE>, word: u32) {
-        let res = buffer.put(word);
-        write_test_result(buffer.writer, res.is_ok(), "test_read_word put should work");
+    pub fn test_read_word<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>, word: u32) {
+        let res = buffer_tester.buffer.put(word);
+        write_test_result(buffer_tester.writer, res.is_ok(), "test_read_word put should work");
 
         assert!(res.is_ok());
 
-        let res = buffer.get();
-        write_test_result(buffer.writer, res.is_ok(), "test_read_word get should work");
+        let res = buffer_tester.buffer.get();
+        write_test_result(buffer_tester.writer, res.is_ok(), "test_read_word get should work");
         match res {
             Ok(val) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     val == word,
                     "test_read_word get should equal put word",
                 );
@@ -395,7 +399,7 @@ pub mod tests {
             }
             Err(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_read_word get should equal put word",
                 );
@@ -406,29 +410,29 @@ pub mod tests {
 
     /// Test that reading two word works
     pub fn test_read_two_words_works<const SIZE: usize>(
-        buffer: &mut Buffer<SIZE>,
+        buffer_tester: &mut BufferTester<SIZE>,
         word1: u32,
         word2: u32,
     ) {
-        let res = buffer.put(word1);
+        let res = buffer_tester.buffer.put(word1);
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_read_two_words first put should work",
         );
         assert!(res.is_ok());
 
-        let res = buffer.put(word2);
+        let res = buffer_tester.buffer.put(word2);
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_read_two_words second put should work",
         );
         assert!(res.is_ok());
 
-        let res = buffer.get();
+        let res = buffer_tester.buffer.get();
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_read_two_words first get should work",
         );
@@ -436,7 +440,7 @@ pub mod tests {
         match res {
             Ok(val) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     val == word1,
                     "test_read_two_words first get should equal put word",
                 );
@@ -444,7 +448,7 @@ pub mod tests {
             }
             Err(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_read_two_words first get should work",
                 );
@@ -452,9 +456,9 @@ pub mod tests {
             }
         }
 
-        let res = buffer.get();
+        let res = buffer_tester.buffer.get();
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_read_two_words second get should work",
         );
@@ -462,7 +466,7 @@ pub mod tests {
         match res {
             Ok(val) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     val == word2,
                     "test_read_two_words second get should equal put word",
                 );
@@ -470,7 +474,7 @@ pub mod tests {
             }
             Err(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_read_two_words second get should work",
                 );
@@ -480,18 +484,18 @@ pub mod tests {
     }
 
     /// Test that reading more words than available fails
-    pub fn test_read_word_empty_fails<const SIZE: usize>(buffer: &mut Buffer<SIZE>, word: u32) {
-        let res = buffer.put(word);
+    pub fn test_read_word_empty_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>, word: u32) {
+        let res = buffer_tester.buffer.put(word);
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_read_word_empty_fails put should work",
         );
         assert!(res.is_ok());
 
-        let res = buffer.get();
+        let res = buffer_tester.buffer.get();
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_read_word_empty_fails get should work",
         );
@@ -499,7 +503,7 @@ pub mod tests {
         match res {
             Ok(val) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     val == word,
                     "test_read_word_empty_fails get should equal put word",
                 );
@@ -507,7 +511,7 @@ pub mod tests {
             }
             Err(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_read_word_empty_fails get should equal put word",
                 );
@@ -515,9 +519,9 @@ pub mod tests {
             }
         }
 
-        let res = buffer.get();
+        let res = buffer_tester.buffer.get();
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_err(),
             "test_read_word_empty_fails get from empty should fail",
         );
@@ -525,7 +529,7 @@ pub mod tests {
         match res {
             Ok(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_read_word_empty_fails get from empty should be empty error",
                 );
@@ -533,7 +537,7 @@ pub mod tests {
             }
             Err(e) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     e == Error::new(ErrorKind::Empty),
                     "test_read_word_empty_fails get from empty should be empty error",
                 );
@@ -544,20 +548,20 @@ pub mod tests {
 
     /// Test writing and reading a word after a read failure
     pub fn test_write_and_read_after_read_fail_works<const SIZE: usize>(
-        buffer: &mut Buffer<SIZE>,
+        buffer_tester: &mut BufferTester<SIZE>,
         word: u32,
     ) {
-        let res = buffer.put(word);
+        let res = buffer_tester.buffer.put(word);
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_write_and_read_word_fail_works put should work",
         );
         assert!(res.is_ok());
 
-        let res = buffer.get();
+        let res = buffer_tester.buffer.get();
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_write_and_read_word_fail_works get should work",
         );
@@ -565,7 +569,7 @@ pub mod tests {
         match res {
             Ok(val) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     val == word,
                     "test_write_and_read_word_fail_works get should equal put word",
                 );
@@ -573,7 +577,7 @@ pub mod tests {
             }
             Err(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_write_and_read_word_fail_works get should equal put word",
                 );
@@ -581,25 +585,25 @@ pub mod tests {
             }
         }
 
-        let res = buffer.get();
+        let res = buffer_tester.buffer.get();
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_err(),
             "test_write_and_read_word_fail_works get second word when empty should fail",
         );
         assert!(res.is_err());
 
-        let res = buffer.put(word);
+        let res = buffer_tester.buffer.put(word);
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_write_and_read_word_fail_works second put should work",
         );
         assert!(res.is_ok());
 
-        let res = buffer.get();
+        let res = buffer_tester.buffer.get();
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_write_and_read_word_fail_works second get should work",
         );
@@ -607,7 +611,7 @@ pub mod tests {
         match res {
             Ok(val) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     val == word,
                     "test_write_and_read_word_fail_works second get should equal put word",
                 );
@@ -615,7 +619,7 @@ pub mod tests {
             }
             Err(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_write_and_read_word_fail_works second get should equal put word",
                 );
@@ -625,17 +629,17 @@ pub mod tests {
     }
 
     /// Test that writing more than the buffer size fails
-    pub fn test_simple_buffer_overflow_fails<const SIZE: usize>(buffer: &mut Buffer<SIZE>) {
-        let buffer_len = buffer.settings.buffer_len as u32;
+    pub fn test_simple_buffer_overflow_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
+        let buffer_len = buffer_tester.buffer.settings.buffer_len as u32;
 
         for i in 0..buffer_len - 1 {
-            let res = buffer.put(i);
+            let res = buffer_tester.buffer.put(i);
             assert!(res.is_ok());
         }
 
-        let res = buffer.put(0x69238632);
+        let res = buffer_tester.buffer.put(0x69238632);
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_err(),
             "test_simple_buffer_overflow_fails last write should fail",
         );
@@ -643,7 +647,7 @@ pub mod tests {
         match res {
             Ok(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_simple_buffer_overflow_fails last write should fail with full error",
                 );
@@ -651,7 +655,7 @@ pub mod tests {
             }
             Err(e) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     e == Error::new(ErrorKind::Full),
                     "test_simple_buffer_overflow_fails last write should fail with full error",
                 );
@@ -664,22 +668,22 @@ pub mod tests {
     /// This is a complicated test where we write and read a word
     /// first, then fill the buffer
     pub fn test_complex_buffer_overflow_fails<const SIZE: usize>(
-        buffer: &mut Buffer<SIZE>,
+        buffer_tester: &mut BufferTester<SIZE>,
         word: u32,
     ) {
-        let buffer_len = buffer.settings.buffer_len as u32;
+        let buffer_len = buffer_tester.buffer.settings.buffer_len as u32;
 
-        let res = buffer.put(word);
+        let res = buffer_tester.buffer.put(word);
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_complex_buffer_overflow_fails first put should work",
         );
         assert!(res.is_ok());
 
-        let res = buffer.get();
+        let res = buffer_tester.buffer.get();
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_ok(),
             "test_complex_buffer_overflow_fails first get should work",
         );
@@ -694,13 +698,13 @@ pub mod tests {
         }
 
         for i in 0..buffer_len - 1 {
-            let res = buffer.put(i);
+            let res = buffer_tester.buffer.put(i);
             assert!(res.is_ok());
         }
 
-        let res = buffer.put(0x69238632);
+        let res = buffer_tester.buffer.put(0x69238632);
         write_test_result(
-            buffer.writer,
+            buffer_tester.writer,
             res.is_err(),
             "test_complex_buffer_overflow_fails last write should fail",
         );
@@ -708,7 +712,7 @@ pub mod tests {
         match res {
             Ok(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_complex_buffer_overflow_fails last write should fail with full error",
                 );
@@ -716,7 +720,7 @@ pub mod tests {
             }
             Err(e) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     e == Error::new(ErrorKind::Full),
                     "test_complex_buffer_overflow_fails last write should fail with full error",
                 );
@@ -726,18 +730,18 @@ pub mod tests {
     }
 
     /// Calling init with a null pointer should fail
-    pub fn test_init_null_pointer_fails<const SIZE: usize>(buffer: &mut Buffer<SIZE>) {
+    pub fn test_init_null_pointer_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
         let addr = core::ptr::null_mut() as *mut BufferStruct;
         let start_addr = core::ptr::null_mut() as *mut u32;
         let end_addr = core::ptr::null() as *const u32;
-        let res = unsafe { (buffer.functions.buffer_init_safe)(addr, start_addr, end_addr) };
+        let res = unsafe { (buffer_tester.buffer.functions.buffer_init_safe)(addr, start_addr, end_addr) };
 
         assert!(res.is_err());
 
         match res {
             Ok(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_init_null_pointer_fails should fail with correct error",
                 );
@@ -745,7 +749,7 @@ pub mod tests {
             }
             Err(e) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     e == Error::new(ErrorKind::NullPointer),
                     "test_init_null_pointer_fails should fail with correct error",
                 );
@@ -755,15 +759,15 @@ pub mod tests {
     }
 
     /// Calling get with a null pointer should fail
-    pub fn test_get_null_pointer_fails<const SIZE: usize>(buffer: &mut Buffer<SIZE>) {
+    pub fn test_get_null_pointer_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
         let addr = core::ptr::null_mut() as *mut BufferStruct;
-        let res = unsafe { (buffer.functions.buffer_read_word_safe)(addr) };
+        let res = unsafe { (buffer_tester.buffer.functions.buffer_read_word_safe)(addr) };
 
         assert!(res.is_err());
         match res {
             Ok(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_get_null_pointer_fails should fail with correct error",
                 );
@@ -771,7 +775,7 @@ pub mod tests {
             }
             Err(e) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     e == Error::new(ErrorKind::NullPointer),
                     "test_get_null_pointer_fails should fail with correct error",
                 );
@@ -781,17 +785,17 @@ pub mod tests {
     }
 
     /// Calling put with a null pointer should fail
-    pub fn test_put_null_pointer_fails<const SIZE: usize>(buffer: &mut Buffer<SIZE>) {
+    pub fn test_put_null_pointer_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
         let addr = core::ptr::null_mut() as *mut BufferStruct;
         let word: u32 = 0x23681068;
 
-        let res = unsafe { (buffer.functions.buffer_write_word_safe)(addr, word) };
+        let res = unsafe { (buffer_tester.buffer.functions.buffer_write_word_safe)(addr, word) };
         assert!(res.is_err());
 
         match res {
             Ok(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_put_null_pointer_fails should fail with correct error",
                 );
@@ -799,7 +803,7 @@ pub mod tests {
             }
             Err(e) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     e == Error::new(ErrorKind::NullPointer),
                     "test_put_null_pointer_fails should fail with correct error",
                 );
@@ -809,16 +813,16 @@ pub mod tests {
     }
 
     /// Calling clear with a null pointer should fail
-    pub fn test_clear_null_pointer_fails<const SIZE: usize>(buffer: &mut Buffer<SIZE>) {
+    pub fn test_clear_null_pointer_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
         let addr = core::ptr::null_mut() as *mut BufferStruct;
-        let res = unsafe { (buffer.functions.buffer_clear_safe)(addr) };
+        let res = unsafe { (buffer_tester.buffer.functions.buffer_clear_safe)(addr) };
 
         assert!(res.is_err());
 
         match res {
             Ok(_) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     false,
                     "test_clear_null_pointer_fails should fail with correct error",
                 );
@@ -826,7 +830,7 @@ pub mod tests {
             }
             Err(e) => {
                 write_test_result(
-                    buffer.writer,
+                    buffer_tester.writer,
                     e == Error::new(ErrorKind::NullPointer),
                     "test_clear_null_pointer_fails should fail with correct error",
                 );
