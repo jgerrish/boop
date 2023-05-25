@@ -107,7 +107,7 @@ pub struct BufferTester<'a, const SIZE: usize> {
     pub writer: &'a mut dyn Write,
 }
 
-impl<'a, const SIZE: usize> Buffer<SIZE> {
+impl<const SIZE: usize> Buffer<SIZE> {
     /// Create a new buffer
     ///
     /// This takes ownership of the array, which is owned by the new
@@ -163,7 +163,7 @@ impl<'a, const SIZE: usize> Buffer<SIZE> {
     }
 }
 
-impl<'a, const SIZE: usize> Queue for Buffer<SIZE> {
+impl<const SIZE: usize> Queue for Buffer<SIZE> {
     /// Initialize the buffer
     unsafe fn init(
         &mut self,
