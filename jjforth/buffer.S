@@ -275,7 +275,7 @@ jjforth_buffer_read:
 	ldr r0, [r9]		/* read the next piece of data */
 
 	/* Check if currkey is at the end of the buffer */
-	cmp r10, r8
+	cmp r9, r8
 
 #ifdef IT_INSTRUCTION
 	ittee ne

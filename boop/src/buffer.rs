@@ -71,8 +71,20 @@ pub struct BufferStruct {
     pub bufftop: *mut u32,
 }
 
+/// Debug formatter implementation for BufferStruct
+impl Debug for BufferStruct {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "  currkey: 0x{:02X}", &(self.currkey as usize))?;
+        write!(f, ", bufftop: 0x{:02X}", &(self.bufftop as usize))?;
+        write!(f, ", currkey item: 0x{:02X}", &(unsafe { *(self.currkey) }))?;
+        write!(f, ", start: 0x{:02X}", &(self.start as usize))?;
+        write!(f, ", end: 0x{:02X}", &(self.end as usize))
+    }
+}
+
 /// Collection of functions for the buffer data structure
 /// This is primarily used to make testing easier
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct BufferFunctions {
     /// The initialization function for the buffer
     pub buffer_init_safe:
@@ -97,6 +109,13 @@ pub struct Buffer<const SIZE: usize> {
     pub settings: BufferSettings,
     /// Functions for the buffer
     pub functions: BufferFunctions,
+}
+
+/// Debug formatter implementation for Buffer
+impl<const SIZE: usize> Debug for Buffer<SIZE> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "{:?}", self.buffer)
+    }
 }
 
 /// Create a testing structure to run tests against a buffer
@@ -254,8 +273,12 @@ impl Debug for ErrorKind {
 /// Run the buffer tests
 pub fn run_tests<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
     unsafe {
-        buffer_tester.buffer
-            .init(buffer_tester.buffer.settings.buffer_addr, buffer_tester.buffer.settings.buffer_end)
+        buffer_tester
+            .buffer
+            .init(
+                buffer_tester.buffer.settings.buffer_addr,
+                buffer_tester.buffer.settings.buffer_end,
+            )
             .unwrap();
     }
 
@@ -263,8 +286,12 @@ pub fn run_tests<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
 
     // reset for the next test
     unsafe {
-        buffer_tester.buffer
-            .init(buffer_tester.buffer.settings.buffer_addr, buffer_tester.buffer.settings.buffer_end)
+        buffer_tester
+            .buffer
+            .init(
+                buffer_tester.buffer.settings.buffer_addr,
+                buffer_tester.buffer.settings.buffer_end,
+            )
             .unwrap();
     }
 
@@ -297,6 +324,17 @@ pub fn run_tests<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
 
     tests::test_simple_buffer_overflow_fails(buffer_tester);
 
+    tests::test_queue_head_wraps_works(buffer_tester.writer, buffer_tester.buffer.functions);
+    tests::test_queue_head_wraps_nonfilled_works(
+        buffer_tester.writer,
+        buffer_tester.buffer.functions,
+    );
+    tests::test_queue_head_wraps_nonemptied_works(
+        buffer_tester.writer,
+        buffer_tester.buffer.functions,
+    );
+    tests::test_queue_last_head_update(buffer_tester.writer, buffer_tester.buffer.functions);
+
     // reset for the next test
     buffer_tester.buffer.clear().unwrap();
 
@@ -312,7 +350,10 @@ pub fn run_tests<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
 #[allow(unused_imports)]
 pub mod tests {
     use crate::{
-        buffer::{Buffer, BufferFunctions, BufferSettings, BufferStruct, BufferTester, Error, ErrorKind, Queue},
+        buffer::{
+            Buffer, BufferFunctions, BufferSettings, BufferStruct, BufferTester, Error, ErrorKind,
+            Queue,
+        },
         tests::write_test_result,
     };
     use core::{arch::asm, fmt::Write};
@@ -382,12 +423,20 @@ pub mod tests {
     /// Test that reading a word works
     pub fn test_read_word<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>, word: u32) {
         let res = buffer_tester.buffer.put(word);
-        write_test_result(buffer_tester.writer, res.is_ok(), "test_read_word put should work");
+        write_test_result(
+            buffer_tester.writer,
+            res.is_ok(),
+            "test_read_word put should work",
+        );
 
         assert!(res.is_ok());
 
         let res = buffer_tester.buffer.get();
-        write_test_result(buffer_tester.writer, res.is_ok(), "test_read_word get should work");
+        write_test_result(
+            buffer_tester.writer,
+            res.is_ok(),
+            "test_read_word get should work",
+        );
         match res {
             Ok(val) => {
                 write_test_result(
@@ -484,7 +533,10 @@ pub mod tests {
     }
 
     /// Test that reading more words than available fails
-    pub fn test_read_word_empty_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>, word: u32) {
+    pub fn test_read_word_empty_fails<const SIZE: usize>(
+        buffer_tester: &mut BufferTester<SIZE>,
+        word: u32,
+    ) {
         let res = buffer_tester.buffer.put(word);
         write_test_result(
             buffer_tester.writer,
@@ -629,7 +681,9 @@ pub mod tests {
     }
 
     /// Test that writing more than the buffer size fails
-    pub fn test_simple_buffer_overflow_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
+    pub fn test_simple_buffer_overflow_fails<const SIZE: usize>(
+        buffer_tester: &mut BufferTester<SIZE>,
+    ) {
         let buffer_len = buffer_tester.buffer.settings.buffer_len as u32;
 
         for i in 0..buffer_len - 1 {
@@ -729,12 +783,245 @@ pub mod tests {
         }
     }
 
+    /// Test a case where the head wraps around
+    pub fn test_queue_head_wraps_works(writer: &mut dyn Write, functions: BufferFunctions) {
+        // Test with a smaller test case
+        let mut array: [u32; 4] = [0; 4];
+
+        let buffer = Buffer::new(&mut array, functions).unwrap();
+
+        let mut buffer_tester = BufferTester { buffer, writer };
+        // Iterate through [1, 2, 3]
+        for i in 1..4 {
+            let res = buffer_tester.buffer.put((i % 256) as u32);
+            write_test_result(
+                buffer_tester.writer,
+                res.is_ok(),
+                "should be able to fill queue",
+            );
+        }
+
+        for i in 1..4 {
+            let res = buffer_tester.buffer.get();
+            write_test_result(
+                buffer_tester.writer,
+                res.unwrap() == ((i % 256) as u32),
+                "should be able to get filled values ",
+            );
+        }
+
+        for i in 1..=2 {
+            let res = buffer_tester.buffer.put(i as u32);
+            write_test_result(
+                buffer_tester.writer,
+                res.is_ok(),
+                "should be able to put in 2 more values",
+            );
+        }
+
+        for i in 1..=2 {
+            let res = buffer_tester.buffer.get();
+            write_test_result(
+                buffer_tester.writer,
+                res.unwrap() == (i as u32),
+                "should be able to get values",
+            );
+        }
+    }
+
+    /// Test a case where the head wraps around
+    /// This tests a case where we don't fill the queue all the way,
+    /// then read those values, then try to wrap
+    pub fn test_queue_head_wraps_nonfilled_works(
+        writer: &mut dyn Write,
+        functions: BufferFunctions,
+    ) {
+        // Test with a smaller test case
+        let mut array: [u32; 4] = [0; 4];
+
+        let buffer = Buffer::new(&mut array, functions).unwrap();
+
+        let mut buffer_tester = BufferTester { buffer, writer };
+
+        // This iterates through [1, 2]
+        for i in 1..=2 {
+            let res = buffer_tester.buffer.put((i % 256) as u32);
+            write_test_result(
+                buffer_tester.writer,
+                res.is_ok(),
+                "should be able to add two items",
+            );
+        }
+
+        for i in 1..=2 {
+            let res = buffer_tester.buffer.get();
+            write_test_result(
+                buffer_tester.writer,
+                res.unwrap() == ((i % 256) as u32),
+                "should be able to get two items",
+            );
+        }
+
+        for i in 1..=2 {
+            let res = buffer_tester.buffer.put(i as u32);
+            write_test_result(
+                buffer_tester.writer,
+                res.is_ok(),
+                "should be able to put in 2 more items",
+            );
+        }
+
+        for i in 1..=2 {
+            let res = buffer_tester.buffer.get();
+            write_test_result(
+                buffer_tester.writer,
+                res.unwrap() == (i as u32),
+                "should be able to get items",
+            );
+        }
+
+        // The queue should now be empty
+        let res = buffer_tester.buffer.get();
+        write_test_result(
+            buffer_tester.writer,
+            res.is_err(),
+            "get from empty queue should fail",
+        );
+    }
+
+    /// Test where we wrap the tail and head with gets in between filling the queue
+    /// Don't empty the queue all the way when getting values before the wrap
+    pub fn test_queue_head_wraps_nonemptied_works(
+        writer: &mut dyn Write,
+        functions: BufferFunctions,
+    ) {
+        // Test with a smaller test case
+        let mut array: [u32; 4] = [0; 4];
+
+        let buffer = Buffer::new(&mut array, functions).unwrap();
+
+        let mut buffer_tester = BufferTester { buffer, writer };
+
+        // put in 2 items [1, 2]
+        for i in [1, 2] {
+            let res = buffer_tester.buffer.put((i % 256) as u32);
+            write_test_result(
+                buffer_tester.writer,
+                res.is_ok(),
+                "should be able to put in 2 items",
+            );
+        }
+
+        // Remove one item
+        let res = buffer_tester.buffer.get();
+        write_test_result(
+            buffer_tester.writer,
+            *res.as_ref().unwrap() == 1_u32,
+            "should be able to get one item ",
+        );
+
+        // Put in 2 items, [3, 4]
+        for i in [3, 4] {
+            let res = buffer_tester.buffer.put(i as u32);
+            write_test_result(
+                buffer_tester.writer,
+                res.is_ok(),
+                "should be able to put in 2 more values",
+            );
+        }
+
+        // Get three items
+        for i in [2, 3, 4] {
+            let res = buffer_tester.buffer.get();
+            write_test_result(
+                buffer_tester.writer,
+                res.unwrap() == (i as u32),
+                "should be able to get all remaining values",
+            );
+        }
+
+        // The queue should now be empty
+        let res = buffer_tester.buffer.get();
+        write_test_result(
+            buffer_tester.writer,
+            res.is_err(),
+            "get from empty queue should fail",
+        );
+    }
+
+    /// Test a case where the last head wasn't being updated in the
+    /// end-of-queue code path
+    pub fn test_queue_last_head_update(writer: &mut dyn Write, functions: BufferFunctions) {
+        // Test with a smaller test case
+        let mut array: [u32; 4] = [0; 4];
+
+        let buffer = Buffer::new(&mut array, functions).unwrap();
+
+        let mut buffer_tester = BufferTester { buffer, writer };
+
+        // This iterates through [1, 2]
+        for i in 1..=2 {
+            let res = buffer_tester.buffer.put((i % 256) as u32);
+            write_test_result(
+                buffer_tester.writer,
+                res.is_ok(),
+                "should be able to add two items",
+            );
+        }
+
+        for i in 1..=2 {
+            let res = buffer_tester.buffer.get();
+            write_test_result(
+                buffer_tester.writer,
+                res.unwrap() == ((i % 256) as u32),
+                "should be able to get two items",
+            );
+        }
+
+        for i in 1..=2 {
+            let res = buffer_tester.buffer.put(i as u32);
+            write_test_result(
+                buffer_tester.writer,
+                res.is_ok(),
+                "should be able to put in 2 more values",
+            );
+        }
+
+        for i in 1..=2 {
+            let res = buffer_tester.buffer.get();
+            write_test_result(
+                buffer_tester.writer,
+                res.unwrap() == (i as u32),
+                "should be able to get values",
+            );
+        }
+
+        // The queue should now be empty
+        let res = buffer_tester.buffer.get();
+        write_test_result(
+            buffer_tester.writer,
+            res.is_err(),
+            "get from empty queue should fail",
+        );
+
+        for i in 1..=3 {
+            let res = buffer_tester.buffer.put(i as u32);
+            write_test_result(
+                buffer_tester.writer,
+                res.is_ok(),
+                "should be able to put in 3 more values",
+            );
+        }
+    }
+
     /// Calling init with a null pointer should fail
     pub fn test_init_null_pointer_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
         let addr = core::ptr::null_mut() as *mut BufferStruct;
         let start_addr = core::ptr::null_mut() as *mut u32;
         let end_addr = core::ptr::null() as *const u32;
-        let res = unsafe { (buffer_tester.buffer.functions.buffer_init_safe)(addr, start_addr, end_addr) };
+        let res = unsafe {
+            (buffer_tester.buffer.functions.buffer_init_safe)(addr, start_addr, end_addr)
+        };
 
         assert!(res.is_err());
 
@@ -813,7 +1100,9 @@ pub mod tests {
     }
 
     /// Calling clear with a null pointer should fail
-    pub fn test_clear_null_pointer_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
+    pub fn test_clear_null_pointer_fails<const SIZE: usize>(
+        buffer_tester: &mut BufferTester<SIZE>,
+    ) {
         let addr = core::ptr::null_mut() as *mut BufferStruct;
         let res = unsafe { (buffer_tester.buffer.functions.buffer_clear_safe)(addr) };
 
