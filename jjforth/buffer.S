@@ -26,9 +26,26 @@
 	  |                   |
        currkey             bufftop
 
-   The X represents a location where data can't be stored.
-   That element is a valid memory location, and the end pointer
-   points to it, but it isn't used for storage.
+   Previous documentation indicated that the last element (where end
+   is pointing) couldn't be modified.  This was confusing.
+   The "reserved" location depends on the location of currkey.  It
+   is the location right "before" currkey.  In this case, it is where
+   end points.  But as currkey moves, it changes:
+
+        start                                    end
+          |                                       |
+          V                                       V
+        +-------------------------------------------+
+        | HX | e | l | l | o |   | .. unused .. |   |
+        +-------------------------------------------+
+	       ^               ^
+	       |               |
+            currkey         bufftop
+
+   Here HX indicates that the current implementation doesn't
+   clear H after a successful get, and the X indicates that
+   this location won't be written with currkey's current value.
+   Where end points is now a valid location to put an item.
 
    To help increase code readability and decrease cognitive load, the
    same registers were used throughout this file to refer to each
