@@ -1,7 +1,7 @@
 //! Forth stack wrapper with Rust Error results and behavior
 #![warn(missing_docs)]
 
-use core::fmt::Write;
+use core::{fmt::Write, marker::PhantomData};
 
 use crate::error::Error;
 
@@ -10,7 +10,7 @@ pub struct StackSettings {
     /// The stack address
     pub stack_addr: usize,
     /// The stack bottom
-    pub stack_bottom: usize,
+    pub stack_bottom_addr: usize,
 }
 
 /// Collection of functions for the stack data structure
@@ -42,27 +42,31 @@ pub struct StackFunctions {
 /// This contains the platform-dependent functions and data for a
 /// stack.
 pub struct Stack<'a> {
-    /// The output stream for writing debug and log messages
-    pub writer: &'a mut dyn Write,
     /// The settings for the stack
     pub settings: StackSettings,
     /// The functions for the stack
     pub functions: StackFunctions,
+
+    _marker: PhantomData<&'a StackSettings>,
 }
 
 impl<'a> Stack<'a> {
     /// Create a new stack
-    pub fn new(
-        writer: &'a mut dyn Write,
-        settings: StackSettings,
-        functions: StackFunctions,
-    ) -> Stack<'a> {
+    pub fn new(settings: StackSettings, functions: StackFunctions) -> Stack<'a> {
         Stack {
-            writer,
             settings,
             functions,
+            _marker: PhantomData,
         }
     }
+}
+
+/// Create a testing structure to run tests against a stack
+pub struct StackTester<'a> {
+    /// The Stack structure to test
+    pub stack: Stack<'a>,
+    /// The output stream for writing debug and log messages
+    pub writer: &'a mut dyn Write,
 }
 
 /// Initialize the stacks
@@ -75,14 +79,14 @@ pub fn stack_init_safe(
 }
 
 /// Run the stack tests
-pub fn run_tests(stack: &mut Stack) {
+pub fn run_tests(stack_tester: &mut StackTester) {
     // Initialize the return and parameter stacks
-    tests::test_stack_init_works(stack);
+    tests::test_stack_init_works(stack_tester);
 
-    let return_stack_bottom_res = tests::get_stack_bottom_test(stack);
+    let return_stack_bottom_res = tests::get_stack_bottom_test(stack_tester);
 
     write!(
-        stack.writer,
+        stack_tester.writer,
         "return stack bottom: 0x{:X}\r\n",
         return_stack_bottom_res
     )
@@ -90,39 +94,42 @@ pub fn run_tests(stack: &mut Stack) {
 
     assert_ne!(return_stack_bottom_res, 0);
 
-    tests::test_poprsp_twice_works(stack);
+    tests::test_poprsp_twice_works(stack_tester);
 
-    tests::test_poprsp_stack_underflow_fails(stack);
-    tests::test_pop_rsp_works(stack);
-    tests::test_pushrsp_stack_overflow_fails(stack);
+    tests::test_poprsp_stack_underflow_fails(stack_tester);
+    tests::test_pop_rsp_works(stack_tester);
+    tests::test_pushrsp_stack_overflow_fails(stack_tester);
 }
 
 /// Test the stack code
 #[allow(unused_imports)]
 pub mod tests {
-    use crate::{stack::Stack, tests::write_test_result};
+    use crate::{
+        stack::{Stack, StackTester},
+        tests::write_test_result,
+    };
     use core::{arch::asm, fmt::Write};
 
     /// Test initialization of the Forth system
     /// The return stack should be set to the value RETURN_STACK_BOTTOM
     /// is set to in the ELF binary sections
-    pub fn test_stack_init_works(stack: &mut Stack) {
+    pub fn test_stack_init_works(stack_tester: &mut StackTester) {
         let mut stack_pointer: *const u32;
         let mut stack_addr: *mut u32;
-        let stack_bottom: *const u32 = stack.settings.stack_bottom as *const u32;
+        let stack_bottom: *const u32 = stack_tester.stack.settings.stack_bottom_addr as *const u32;
 
-        write!(stack.writer, "Testing stack_init works\r\n").unwrap();
+        write!(stack_tester.writer, "Testing stack_init works\r\n").unwrap();
 
         unsafe {
             asm!(
                 "mov r5, {}",
                 "mov {}, r5",
-                in(reg) stack.settings.stack_addr,
+                in(reg) stack_tester.stack.settings.stack_addr,
                 out(reg) stack_addr,
                 options(nomem, nostack, preserves_flags));
         }
         write!(
-            stack.writer,
+            stack_tester.writer,
             "The Forth memory starts at 0x{:X}\r\n",
             stack_addr as u32
         )
@@ -135,13 +142,13 @@ pub mod tests {
                 options(nomem, nostack, preserves_flags));
         }
         write!(
-            stack.writer,
+            stack_tester.writer,
             "Current value of stack pointer: 0x{:X}\r\n",
             stack_pointer as u32
         )
         .unwrap();
 
-        crate::stack::stack_init_safe(stack.functions.init, stack_addr, stack_bottom);
+        crate::stack::stack_init_safe(stack_tester.stack.functions.init, stack_addr, stack_bottom);
 
         unsafe {
             asm!(
@@ -150,7 +157,7 @@ pub mod tests {
                 options(nomem, nostack, preserves_flags));
         }
         write_test_result(
-            stack.writer,
+            stack_tester.writer,
             stack_pointer == stack_addr,
             "current value of stack pointer should equal expected",
         );
@@ -198,27 +205,27 @@ pub mod tests {
     }
 
     /// Test that pushing a value on a full stack fails
-    pub fn test_pushrsp_stack_overflow_fails(stack: &Stack) {
+    pub fn test_pushrsp_stack_overflow_fails(stack_tester: &StackTester) {
         for _i in 0..512 {
-            let res = (stack.functions.push)(3);
+            let res = (stack_tester.stack.functions.push)(3);
             assert!(res.is_ok());
         }
-        let res = (stack.functions.push)(3);
+        let res = (stack_tester.stack.functions.push)(3);
         assert!(res.is_err());
     }
 
     /// Test that popping a value when there are no values on the
     /// stack fails
-    pub fn test_poprsp_stack_underflow_fails(stack: &Stack) {
-        let res = (stack.functions.pop)();
+    pub fn test_poprsp_stack_underflow_fails(stack_tester: &StackTester) {
+        let res = (stack_tester.stack.functions.pop)();
         assert!(res.is_err());
 
-        let res = (stack.functions.pop)();
+        let res = (stack_tester.stack.functions.pop)();
         assert!(res.is_err());
     }
 
     /// Test that popping value from the return stack works
-    pub fn test_pop_rsp_works(stack: &mut Stack) {
+    pub fn test_pop_rsp_works(stack_tester: &mut StackTester) {
         let mut stack_pointer_old: u32;
         let test_val: u32 = 0x798C6FD6;
 
@@ -229,13 +236,13 @@ pub mod tests {
                 options(nomem, nostack, preserves_flags));
         }
         write!(
-            stack.writer,
+            stack_tester.writer,
             "Current value of stack pointer: 0x{:X}\r\n",
             stack_pointer_old
         )
         .unwrap();
 
-        let _res = (stack.functions.push)(test_val);
+        let _res = (stack_tester.stack.functions.push)(test_val);
 
         let mut stack_pointer_new: u32;
         unsafe {
@@ -246,7 +253,7 @@ pub mod tests {
         }
 
         write!(
-            stack.writer,
+            stack_tester.writer,
             "New value of stack pointer: 0x{:X}\r\n",
             stack_pointer_new
         )
@@ -254,7 +261,7 @@ pub mod tests {
 
         assert_eq!(stack_pointer_old - stack_pointer_new, 4);
 
-        let res = (stack.functions.pop)();
+        let res = (stack_tester.stack.functions.pop)();
 
         let mut stack_pointer_new: u32;
         unsafe {
@@ -268,7 +275,7 @@ pub mod tests {
         assert_eq!(stack_pointer_old - stack_pointer_new, 0);
 
         write!(
-            stack.writer,
+            stack_tester.writer,
             "New value of stack pointer: 0x{:X}\r\n",
             stack_pointer_new
         )
@@ -281,7 +288,7 @@ pub mod tests {
             }
         }
         write_test_result(
-            stack.writer,
+            stack_tester.writer,
             passed,
             "current value of stack pointer should equal expected",
         );
@@ -289,28 +296,28 @@ pub mod tests {
     }
 
     /// Test that popping two values from the stack works.
-    pub fn test_poprsp_twice_works(stack: &Stack) {
+    pub fn test_poprsp_twice_works(stack_tester: &StackTester) {
         let test_val_1 = 0x23481801;
         let test_val_2 = 0x25692815;
 
-        let _res = (stack.functions.push)(test_val_1);
-        let _res = (stack.functions.push)(test_val_2);
+        let _res = (stack_tester.stack.functions.push)(test_val_1);
+        let _res = (stack_tester.stack.functions.push)(test_val_2);
 
-        let res = (stack.functions.pop)();
+        let res = (stack_tester.stack.functions.pop)();
 
         match res {
             Ok(v) => assert_eq!(v, test_val_2),
             Err(_) => panic!(),
         }
 
-        let res = (stack.functions.pop)();
+        let res = (stack_tester.stack.functions.pop)();
 
         match res {
             Ok(v) => assert_eq!(v, test_val_1),
             Err(_) => panic!(),
         }
 
-        let res = (stack.functions.pop)();
+        let res = (stack_tester.stack.functions.pop)();
         match res {
             Ok(_) => panic!(),
             Err(e) => {
@@ -320,7 +327,7 @@ pub mod tests {
     }
 
     /// Test getting the address of the return stack bottom
-    pub fn get_stack_bottom_test(stack: &Stack) -> u32 {
-        (stack.functions.get_stack_bottom_safe)()
+    pub fn get_stack_bottom_test(stack_tester: &StackTester) -> u32 {
+        (stack_tester.stack.functions.get_stack_bottom_safe)()
     }
 }

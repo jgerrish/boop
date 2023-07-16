@@ -4,11 +4,33 @@
 #![warn(missing_docs)]
 #![no_std]
 
+use cortex_m::interrupt::Mutex;
+
+use core::{
+    cell::RefCell,
+    fmt::{Debug, Formatter},
+};
+
 use boop::{
     buffer::BufferStruct,
     dict::{Flag, Word},
     error::Error,
 };
+
+/// A handle to an array to manage lifetimes and concurrency
+pub struct ArrayHandle {
+    /// Pointer to the array
+    pub data: *mut u8,
+    /// Length of the array
+    pub len: usize,
+}
+
+impl Debug for ArrayHandle {
+    fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
+        write!(f, "  currkey: 0x{:X}", self.data as usize)?;
+        write!(f, ", bufftop: 0x{:X}", self.len)
+    }
+}
 
 // Create a new section for a FORTH stack.
 // This memory will be managed by Rust, not assembly code.
@@ -31,11 +53,15 @@ use boop::{
 
 /// The address of the Forth return stack
 #[link_section = ".ram2bss"]
-pub static mut FORTH_RETURN_STACK: [u8; 2048] = [0; 2048];
+static mut FORTH_RETURN_STACK: [u8; 2048] = [0; 2048];
 
-/// The address of the Forth parameter stack
-#[link_section = ".ram2bss"]
-pub static mut FORTH_PARAMETER_STACK: [u8; 2048] = [0; 2048];
+/// A handle to the forth return stack data
+pub static mut FORTH_RETURN_STACK_HANDLE: Mutex<RefCell<Option<ArrayHandle>>> = unsafe {
+    Mutex::new(RefCell::new(Some(ArrayHandle {
+        data: FORTH_RETURN_STACK.as_mut_ptr(),
+        len: FORTH_RETURN_STACK.len(),
+    })))
+};
 
 /// Allocate space for a buffer.
 /// The buffer is implemented as a queue.
