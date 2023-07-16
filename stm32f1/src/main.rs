@@ -87,47 +87,53 @@ fn run_buffer_tests(writer: &mut dyn Write) {
 }
 
 fn run_tests(writer: &mut dyn Write) {
-    let return_stack_handle = cortex_m::interrupt::free(|cs| unsafe {
-        FORTH_RETURN_STACK_HANDLE.borrow(cs).replace(None).unwrap()
-    });
+    // Create an additional scope to constrain the stack
+    // Stack needs to be refactored to correctly manage lifetimes
+    let return_stack_handle = {
+        let return_stack_handle = cortex_m::interrupt::free(|cs| unsafe {
+            FORTH_RETURN_STACK_HANDLE.borrow(cs).replace(None).unwrap()
+        });
 
-    // Get the return stack address from the memory layout
-    let return_stack_addr = return_stack_handle.data as usize + return_stack_handle.len;
-    let return_stack_size = return_stack_handle.len;
-    let return_stack_bottom_addr = return_stack_addr - return_stack_size;
+        // Get the return stack address from the memory layout
+        let return_stack_addr = return_stack_handle.data as usize + return_stack_handle.len;
+        let return_stack_size = return_stack_handle.len;
+        let return_stack_bottom_addr = return_stack_addr - return_stack_size;
 
-    write!(
-        writer,
-        "return stack bottom in Rust: 0x{:X}\r\n",
-        return_stack_bottom_addr,
-    )
-    .unwrap();
+        write!(
+            writer,
+            "return stack bottom in Rust: 0x{:X}\r\n",
+            return_stack_bottom_addr,
+        )
+        .unwrap();
 
-    write!(
-        writer,
-        "FORTH_RETURN_STACK: 0x{:X}\r\n",
-        return_stack_addr as u32
-    )
-    .unwrap();
+        write!(
+            writer,
+            "FORTH_RETURN_STACK: 0x{:X}\r\n",
+            return_stack_addr as u32
+        )
+        .unwrap();
 
-    boop::tests::test_start_works(writer, start_safe);
+        boop::tests::test_start_works(writer, start_safe);
 
-    let stack = Stack::new(
-        boop::stack::StackSettings {
-            stack_addr: return_stack_addr,
-            stack_bottom_addr: return_stack_bottom_addr,
-        },
-        boop::stack::StackFunctions {
-            init: stack_init_safe,
-            push: stack_push_safe,
-            pop: stack_pop_safe,
-            get_stack_bottom_safe,
-        },
-    );
+        let stack = Stack::new(
+            boop::stack::StackSettings {
+                stack_addr: return_stack_addr,
+                stack_bottom_addr: return_stack_bottom_addr,
+            },
+            boop::stack::StackFunctions {
+                init: stack_init_safe,
+                push: stack_push_safe,
+                pop: stack_pop_safe,
+                get_stack_bottom_safe,
+            },
+        );
 
-    let mut stack_tester = StackTester { writer, stack };
+        let mut stack_tester = StackTester { writer, stack };
 
-    boop::stack::run_tests(&mut stack_tester);
+        boop::stack::run_tests(&mut stack_tester);
+
+        return_stack_handle
+    };
 
     let res = cortex_m::interrupt::free(|cs| unsafe {
         FORTH_RETURN_STACK_HANDLE
