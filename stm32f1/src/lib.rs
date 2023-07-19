@@ -6,31 +6,15 @@
 
 use cortex_m::interrupt::Mutex;
 
-use core::{
-    cell::RefCell,
-    fmt::{Debug, Formatter},
-};
+use core::{cell::RefCell, marker::PhantomData};
 
 use boop::{
     buffer::BufferStruct,
     dict::{Flag, Word},
     error::Error,
+    stack::StackStruct,
+    ArrayHandle,
 };
-
-/// A handle to an array to manage lifetimes and concurrency
-pub struct ArrayHandle {
-    /// Pointer to the array
-    pub data: *mut u8,
-    /// Length of the array
-    pub len: usize,
-}
-
-impl Debug for ArrayHandle {
-    fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
-        write!(f, "  currkey: 0x{:X}", self.data as usize)?;
-        write!(f, ", bufftop: 0x{:X}", self.len)
-    }
-}
 
 // Create a new section for a FORTH stack.
 // This memory will be managed by Rust, not assembly code.
@@ -51,15 +35,16 @@ impl Debug for ArrayHandle {
 
 // Making the variable mutable in Rust marks it as W.
 
-/// The address of the Forth return stack
+/// The Forth return stack
 #[link_section = ".ram2bss"]
-static mut FORTH_RETURN_STACK: [u8; 2048] = [0; 2048];
+static mut FORTH_RETURN_STACK: [u32; 512] = [0; 512];
 
 /// A handle to the forth return stack data
-pub static mut FORTH_RETURN_STACK_HANDLE: Mutex<RefCell<Option<ArrayHandle>>> = unsafe {
+pub static mut FORTH_RETURN_STACK_HANDLE: Mutex<RefCell<Option<ArrayHandle<u32>>>> = unsafe {
     Mutex::new(RefCell::new(Some(ArrayHandle {
-        data: FORTH_RETURN_STACK.as_mut_ptr(),
+        ptr: FORTH_RETURN_STACK.as_mut_ptr(),
         len: FORTH_RETURN_STACK.len(),
+        _marker: PhantomData,
     })))
 };
 
@@ -96,23 +81,27 @@ pub static mut FORTH_DICTIONARY: [u8; 1024] = [0; 1024];
 extern "C" {
     // Stack functions
     /// Initialize the stack
-    pub fn jjforth_stack_init(memory_start: *mut u32, stack_bottom: *const u32);
+    pub fn jjforth_stack_init(
+        stack: *mut StackStruct,
+        memory_start: *mut u32,
+        stack_len: u32,
+    ) -> u32;
 
     /// Pop a value from the stack
     /// data is a pointer to a variable to contain the returned data
     /// The function returns a u32 value indicating the error code
-    pub fn jjforth_stack_pop(data: *mut u32) -> u32;
+    pub fn jjforth_stack_pop(stack: *const StackStruct, data: *mut u32) -> u32;
 
     /// Push a value onto the stack
     /// The value to be pushed should be in value
     /// It returns a u32 value indicating the error code
-    pub fn jjforth_stack_push(value: u32) -> u32;
+    pub fn jjforth_stack_push(stack: *const StackStruct, value: u32) -> u32;
 
     /// Initialize the Forth system
     pub fn jjforth_start();
 
     /// Get the stack bottom address
-    pub fn jjforth_get_stack_bottom() -> u32;
+    pub fn jjforth_get_stack_bottom(stack: *const StackStruct, result: *mut u32) -> u32;
 
     /// Initialize the buffer
     pub fn jjforth_buffer_init(
@@ -159,9 +148,31 @@ extern "C" {
 // the architecture-dependent crates.
 
 /// Initialize the stacks
+///
+/// The stack len is in terms of the element size.  For example, a
+/// u32 stack that can hold 10 u32 values has a stack size of 40.
+///
+/// # Safety
+///
+/// This function must be called before any other stack functions are
+/// called.  The caller is responsible for allocating and deallocating
+/// the stack data.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn stack_init_safe(memory_start: *mut u32, stack_bottom: *const u32) {
-    unsafe { jjforth_stack_init(memory_start, stack_bottom) }
+pub fn stack_init_safe(
+    stack: *mut StackStruct,
+    memory_start: *mut u32,
+    stack_len: u32,
+) -> Result<(), boop::stack::Error> {
+    let res = unsafe { jjforth_stack_init(stack, memory_start, stack_len) };
+
+    match res {
+        0 => Ok(()),
+        1 => Err(boop::stack::Error::new(boop::stack::ErrorKind::NullPointer)),
+        2 => Err(boop::stack::Error::new(
+            boop::stack::ErrorKind::InvalidArguments,
+        )),
+        _ => Err(boop::stack::Error::new(boop::stack::ErrorKind::Unknown)),
+    }
 }
 
 /// Wrapper to pop a value from the stack.
@@ -169,28 +180,42 @@ pub fn stack_init_safe(memory_start: *mut u32, stack_bottom: *const u32) {
 /// with the popped value.
 /// It fails with a StackUnderflow error if there is no data available
 /// on the stack.
-pub fn stack_pop_safe() -> Result<u32, boop::error::Error> {
+///
+/// # Safety
+///
+/// This function must be called after stack_init_safe has been called
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn stack_pop_safe(stack: *const StackStruct) -> Result<u32, boop::stack::Error> {
     let mut data: u32 = 0x79327523;
-    let res = unsafe { jjforth_stack_pop(&mut data) };
+    let data_ptr = core::ptr::addr_of_mut!(data);
+
+    let res = unsafe { jjforth_stack_pop(stack, data_ptr) };
     match res {
         0 => Ok(data),
-        1 => Err(boop::error::Error::new(
-            boop::error::ErrorKind::StackUnderflow,
+        1 => Err(boop::stack::Error::new(boop::stack::ErrorKind::NullPointer)),
+        2 => Err(boop::stack::Error::new(
+            boop::stack::ErrorKind::StackUnderflow,
         )),
-        _ => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown)),
+        _ => Err(boop::stack::Error::new(boop::stack::ErrorKind::Unknown)),
     }
 }
 
 /// Wrapper to push a value onto the stack
-pub fn stack_push_safe(value: u32) -> Result<(), boop::error::Error> {
-    let res = unsafe { jjforth_stack_push(value) };
+///
+/// # Safety
+///
+/// This function must be called after stack_init_safe has been called
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn stack_push_safe(stack: *const StackStruct, value: u32) -> Result<(), boop::stack::Error> {
+    let res = unsafe { jjforth_stack_push(stack, value) };
 
     match res {
         0 => Ok(()),
-        1 => Err(boop::error::Error::new(
-            boop::error::ErrorKind::StackOverflow,
+        1 => Err(boop::stack::Error::new(boop::stack::ErrorKind::NullPointer)),
+        2 => Err(boop::stack::Error::new(
+            boop::stack::ErrorKind::StackOverflow,
         )),
-        _ => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown)),
+        _ => Err(boop::stack::Error::new(boop::stack::ErrorKind::Unknown)),
     }
 }
 
@@ -200,8 +225,23 @@ pub fn start_safe() {
 }
 
 /// Safe wrapper to get the stack bottom address
-pub fn get_stack_bottom_safe() -> u32 {
-    unsafe { jjforth_get_stack_bottom() }
+///
+/// # Safety
+///
+/// This function must be called after stack_init_safe has been called
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn get_stack_bottom_safe(stack: *const StackStruct) -> Result<u32, boop::stack::Error> {
+    let mut result: u32 = 0x00;
+
+    let result_ptr = core::ptr::addr_of_mut!(result);
+
+    let res = unsafe { jjforth_get_stack_bottom(stack, result_ptr) };
+
+    match res {
+        0 => Ok(result),
+        1 => Err(boop::stack::Error::new(boop::stack::ErrorKind::NullPointer)),
+        _ => Err(boop::stack::Error::new(boop::stack::ErrorKind::Unknown)),
+    }
 }
 
 /// Initialize the buffer

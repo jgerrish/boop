@@ -1,63 +1,247 @@
 //! Forth stack wrapper with Rust Error results and behavior
 #![warn(missing_docs)]
 
-use core::{fmt::Write, marker::PhantomData};
+use core::{
+    fmt::{Debug, Display, Formatter, Result, Write},
+    marker::PhantomData,
+};
 
-use crate::error::Error;
+use crate::ArrayHandle;
 
-/// The settings for the stacks
-pub struct StackSettings {
-    /// The stack address
-    pub stack_addr: usize,
-    /// The stack bottom
-    pub stack_bottom_addr: usize,
+/// An error that can occur when operating on a stack
+#[derive(Eq, PartialEq)]
+pub struct Error {
+    /// A member structure representing the type or kind of error
+    pub kind: ErrorKind,
+}
+
+impl Debug for Error {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "{}", self.kind)
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "{}", self.kind)
+    }
+}
+
+impl Error {
+    /// Create a new Error with a given ErrorKind variant
+    pub fn new(kind: ErrorKind) -> Error {
+        Error { kind }
+    }
+}
+
+/// The kinds of errors that can occur working with stacks
+#[derive(Eq, PartialEq)]
+pub enum ErrorKind {
+    /// A NULL pointer error occurred
+    NullPointer,
+    /// Invalid arguments were passed into a function.
+    /// Example includes trying to initialize a stack with the bottom
+    /// greater than the top.
+    InvalidArguments,
+    /// A stack overflow would occur if an item is pushed
+    StackOverflow,
+    /// A stack underflow would occur if an item is popped
+    StackUnderflow,
+    /// An unknown error type
+    Unknown,
+}
+
+impl Display for ErrorKind {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        match self {
+            ErrorKind::NullPointer => write!(f, "A NULL pointer was passed to the function"),
+            ErrorKind::InvalidArguments => {
+                write!(f, "Invalid arguments were passed to the function")
+            }
+            ErrorKind::StackOverflow => write!(f, "A stack overflow occurred"),
+            ErrorKind::StackUnderflow => write!(f, "A stack underflow occurred"),
+            ErrorKind::Unknown => write!(f, "An unknown error occurred"),
+        }
+    }
+}
+
+impl Debug for ErrorKind {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "{}", self)
+    }
+}
+
+/// The stack structure used for FFI
+#[repr(C)]
+pub struct StackStruct<'a> {
+    /// The number of entries the stack can store
+    pub len: usize,
+    /// The bottom of the stack.
+    /// This the location of one item beyond the end of the array.
+    /// Data can't be stored there, but it is used for checking for
+    /// stack underflow when popping an item.
+    pub bottom: *const u32,
+    /// The current top of the stack
+    pub top: *mut u32,
+    /// The maximum top of the stack
+    /// This is the start of the array
+    pub maximum_top: *const u32,
+    /// Marker so we can link lifetimes to the backing array
+    _marker: PhantomData<&'a u32>,
+}
+
+impl<'a> Debug for StackStruct<'a> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "len: {}, ", self.len)?;
+        write!(f, "bottom: {:?}, ", self.bottom)?;
+        write!(f, "top: {:?}, ", self.top)?;
+        write!(f, "maximum_top: {:?}, ", self.maximum_top)
+    }
 }
 
 /// Collection of functions for the stack data structure
 /// This is primarily used to make testing easier
 pub struct StackFunctions {
     /// The stack initialization function
-    pub init: fn(*mut u32, *const u32),
+    pub init: fn(*mut StackStruct, *mut u32, u32) -> core::result::Result<(), Error>,
     /// The push function for the stack
-    pub push: fn(u32) -> core::result::Result<(), Error>,
+    pub push: fn(*const StackStruct, u32) -> core::result::Result<(), Error>,
     /// The pop function for the stack
-    pub pop: fn() -> core::result::Result<u32, Error>,
+    pub pop: fn(*const StackStruct) -> core::result::Result<u32, Error>,
     /// Get the bottom address of the stack
-    pub get_stack_bottom_safe: fn() -> u32,
+    pub get_stack_bottom_safe: fn(*const StackStruct) -> core::result::Result<u32, Error>,
 }
 
-// /// The operations that a stack can perform
-// pub trait StackOps {
-//     /// Initialize the stack
-//     fn stack_init(stack_addr: u32, stack_bottom: u32);
-//     /// The push function for the stack
-//     fn push(value: u32) -> core::result::Result<(), crate::stack::Error>;
-//     /// The pop function for the stack
-//     fn pop() -> core::result::Result<u32, crate::stack::Error>;
-//     /// Get the bottom address of the stack
-//     fn get_stack_bottom_safe() -> u32;
-// }
+/// Basic operations that a stack can perform
+pub trait StackOps<T> {
+    /// Push an item onto the stack
+    ///
+    /// # Arguments
+    /// # Returns
+    ///
+    /// # Examples
+    /// ```
+    /// use crate::{
+    ///     ArrayHandle,
+    ///     stack::{Error, Stack, StackFunctions, StackOps, StackStruct}
+    /// };
+    ///
+    /// let mut arr: [u32; 4] = [0; 4];
+    /// let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+    /// let sf = StackFunctions {
+    ///     init: |_stack: *mut StackStruct,
+    ///            _memory_start: *mut u32,
+    ///            _stack_len: u32|
+    ///      -> core::result::Result<(), Error> { Ok(()) },
+    ///     push: |_stack: *const StackStruct, _value: u32| -> core::result::Result<(), Error> {
+    ///         Ok(())
+    ///     },
+    ///     pop: |_stack: *const StackStruct| -> core::result::Result<u32, Error> { Ok(0xF4) },
+    ///     get_stack_bottom_safe:
+    ///         |_stack: *const StackStruct| -> core::result::Result<u32, Error> { Ok(0) },
+    /// };
+    /// let mut stack = Stack::new(&handle, &sf).unwrap();
+    ///
+    /// let res = stack.push(0xF4);
+    ///
+    /// assert!(res.is_ok());
+    ///
+    /// ```
+    fn push(&mut self, value: T) -> core::result::Result<(), crate::stack::Error>;
+    /// Pop an item from the stack
+    ///
+    /// # Arguments
+    /// # Returns
+    ///
+    /// # Examples
+    /// ```
+    /// use crate::{
+    ///     ArrayHandle,
+    ///     stack::{Error, Stack, StackFunctions, StackOps, StackStruct}
+    /// };
+    ///
+    ///
+    /// let mut arr: [u32; 4] = [0; 4];
+    /// let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+    /// let sf = StackFunctions {
+    ///     init: |_stack: *mut StackStruct,
+    ///            _memory_start: *mut u32,
+    ///            _stack_len: u32|
+    ///      -> core::result::Result<(), Error> { Ok(()) },
+    ///     push: |_stack: *const StackStruct, _value: u32| -> core::result::Result<(), Error> {
+    ///         Ok(())
+    ///     },
+    ///     pop: |_stack: *const StackStruct| -> core::result::Result<u32, Error> { Ok(0x35) },
+    ///     get_stack_bottom_safe:
+    ///         |_stack: *const StackStruct| -> core::result::Result<u32, Error> { Ok(0) },
+    /// x};
+    ///
+    /// let mut stack = Stack::new(&handle, &sf).unwrap();
+    ///
+    /// let _res = stack.push(0x35);
+    /// let res = stack.pop().unwrap();
+    ///
+    /// assert_eq!(res, 0x35);
+    ///
+    ///
+    /// ```
+    fn pop(&mut self) -> core::result::Result<T, crate::stack::Error>;
+}
 
 /// The data structure representing a stack.
 /// This contains the platform-dependent functions and data for a
 /// stack.
 pub struct Stack<'a> {
-    /// The settings for the stack
-    pub settings: StackSettings,
+    /// The C structure
+    pub stack_struct: StackStruct<'a>,
     /// The functions for the stack
-    pub functions: StackFunctions,
+    pub functions: &'a StackFunctions,
+}
 
-    _marker: PhantomData<&'a StackSettings>,
+impl<'a> Debug for Stack<'a> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        let slice = unsafe {
+            core::slice::from_raw_parts(self.stack_struct.maximum_top, self.stack_struct.len)
+        };
+        write!(f, "stack struct: {:?}, ", self.stack_struct)?;
+        write!(f, "contents: {:?}, ", slice)
+    }
 }
 
 impl<'a> Stack<'a> {
     /// Create a new stack
-    pub fn new(settings: StackSettings, functions: StackFunctions) -> Stack<'a> {
-        Stack {
-            settings,
-            functions,
+    pub fn new(
+        handle: &'a ArrayHandle<'a, u32>,
+        functions: &'a StackFunctions,
+    ) -> core::result::Result<Self, Error> {
+        let stack_struct = StackStruct {
+            len: 0,
+            bottom: core::ptr::null_mut::<u32>(),
+            top: core::ptr::null_mut::<u32>(),
+            maximum_top: core::ptr::null_mut::<u32>(),
             _marker: PhantomData,
+        };
+
+        let mut stack = Stack {
+            stack_struct,
+            functions,
+        };
+
+        let res = stack_init_safe(&mut stack, handle.ptr, handle.len as u32);
+
+        match res {
+            Ok(_) => Ok(stack),
+            Err(e) => Err(e),
         }
+    }
+}
+
+impl<'a> StackOps<u32> for Stack<'a> {
+    fn push(&mut self, value: u32) -> core::result::Result<(), crate::stack::Error> {
+        (self.functions.push)(core::ptr::addr_of!(self.stack_struct), value)
+    }
+    fn pop(&mut self) -> core::result::Result<u32, crate::stack::Error> {
+        (self.functions.pop)(core::ptr::addr_of!(self.stack_struct))
     }
 }
 
@@ -71,215 +255,293 @@ pub struct StackTester<'a> {
 
 /// Initialize the stacks
 pub fn stack_init_safe(
-    stack_init: fn(*mut u32, *const u32),
+    stack: &mut Stack,
     memory_start: *mut u32,
-    stack_bottom: *const u32,
-) {
-    stack_init(memory_start, stack_bottom)
+    stack_len: u32,
+) -> core::result::Result<(), Error> {
+    let addr = core::ptr::addr_of_mut!(stack.stack_struct);
+
+    (stack.functions.init)(addr, memory_start, stack_len)
 }
 
 /// Run the stack tests
 pub fn run_tests(stack_tester: &mut StackTester) {
     // Initialize the return and parameter stacks
-    tests::test_stack_init_works(stack_tester);
+    // tests::test_stack_init_works(stack_tester);
 
-    let return_stack_bottom_res = tests::get_stack_bottom_test(stack_tester);
+    tests::test_init_works(stack_tester);
+    tests::test_init_zero_length_fails(stack_tester);
+    tests::test_init_end_of_memory_works(stack_tester);
+    tests::test_init_carry_fails(stack_tester);
 
-    write!(
-        stack_tester.writer,
-        "return stack bottom: 0x{:X}\r\n",
-        return_stack_bottom_res
-    )
-    .unwrap();
+    tests::test_pop_twice_works(stack_tester);
+    tests::test_pop_stack_underflow_fails(stack_tester);
+    tests::test_pop_works(stack_tester);
+    tests::test_push_works(stack_tester);
+    tests::test_stack_overflow_fails(stack_tester);
+    tests::test_fill_empty_fill_works(stack_tester);
 
-    assert_ne!(return_stack_bottom_res, 0);
-
-    tests::test_poprsp_twice_works(stack_tester);
-
-    tests::test_poprsp_stack_underflow_fails(stack_tester);
-    tests::test_pop_rsp_works(stack_tester);
-    tests::test_pushrsp_stack_overflow_fails(stack_tester);
+    doc_tests::test_push();
+    doc_tests::test_pop();
 }
 
 /// Test the stack code
 #[allow(unused_imports)]
 pub mod tests {
     use crate::{
-        stack::{Stack, StackTester},
+        stack::{Error, ErrorKind, Stack, StackOps, StackStruct, StackTester},
         tests::write_test_result,
+        ArrayHandle,
     };
-    use core::{arch::asm, fmt::Write};
+    use core::{arch::asm, fmt::Write, marker::PhantomData};
 
-    /// Test initialization of the Forth system
-    /// The return stack should be set to the value RETURN_STACK_BOTTOM
-    /// is set to in the ELF binary sections
-    pub fn test_stack_init_works(stack_tester: &mut StackTester) {
-        let mut stack_pointer: *const u32;
-        let mut stack_addr: *mut u32;
-        let stack_bottom: *const u32 = stack_tester.stack.settings.stack_bottom_addr as *const u32;
+    /// Test that init works
+    pub fn test_init_works(stack_tester: &mut StackTester) {
+        let mut arr: [u32; 4] = [0; 4];
+        let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
 
-        write!(stack_tester.writer, "Testing stack_init works\r\n").unwrap();
+        let stack_struct = StackStruct {
+            len: 0,
+            bottom: core::ptr::null_mut::<u32>(),
+            top: core::ptr::null_mut::<u32>(),
+            maximum_top: core::ptr::null_mut::<u32>(),
+            _marker: PhantomData,
+        };
 
-        unsafe {
-            asm!(
-                "mov r5, {}",
-                "mov {}, r5",
-                in(reg) stack_tester.stack.settings.stack_addr,
-                out(reg) stack_addr,
-                options(nomem, nostack, preserves_flags));
-        }
-        write!(
-            stack_tester.writer,
-            "The Forth memory starts at 0x{:X}\r\n",
-            stack_addr as u32
-        )
-        .unwrap();
+        let mut stack = Stack {
+            stack_struct,
+            functions: stack_tester.stack.functions,
+        };
 
-        unsafe {
-            asm!(
-                "mov {}, r5",
-                out(reg) stack_pointer,
-                options(nomem, nostack, preserves_flags));
-        }
-        write!(
-            stack_tester.writer,
-            "Current value of stack pointer: 0x{:X}\r\n",
-            stack_pointer as u32
-        )
-        .unwrap();
+        let res = crate::stack::stack_init_safe(&mut stack, handle.ptr, handle.len as u32);
 
-        crate::stack::stack_init_safe(stack_tester.stack.functions.init, stack_addr, stack_bottom);
-
-        unsafe {
-            asm!(
-                "mov {}, r5",
-                out(reg) stack_pointer,
-                options(nomem, nostack, preserves_flags));
-        }
         write_test_result(
             stack_tester.writer,
-            stack_pointer == stack_addr,
-            "current value of stack pointer should equal expected",
+            res.is_ok(),
+            "stack::tests::test_init_works init result was ok",
         );
-        assert_eq!(stack_pointer, stack_addr);
+
+        write_test_result(
+            stack_tester.writer,
+            stack.stack_struct.len == arr.len(),
+            "stack::tests::test_init_works stack size is correct",
+        );
+
+        let bottom =
+            (arr.as_ptr() as usize + (arr.len() * ((u32::BITS / 8) as usize))) as *const u32;
+
+        write_test_result(
+            stack_tester.writer,
+            stack.stack_struct.bottom == bottom,
+            "stack::tests::test_init_works stack bottom is correct",
+        );
+
+        write_test_result(
+            stack_tester.writer,
+            stack.stack_struct.top == bottom as *mut u32,
+            "stack::tests::test_init_works stack top is correct",
+        );
+
+        write_test_result(
+            stack_tester.writer,
+            stack.stack_struct.maximum_top == arr.as_mut_ptr(),
+            "stack::tests::test_init_works stack maximum top is correct",
+        );
+    }
+
+    /// Test that init with a zero length fails
+    pub fn test_init_zero_length_fails(stack_tester: &mut StackTester) {
+        let mut arr: [u32; 0] = [0; 0];
+        let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+
+        let stack_struct = StackStruct {
+            len: 0,
+            bottom: core::ptr::null_mut::<u32>(),
+            top: core::ptr::null_mut::<u32>(),
+            maximum_top: core::ptr::null_mut::<u32>(),
+            _marker: PhantomData,
+        };
+
+        let mut stack = Stack {
+            stack_struct,
+            functions: stack_tester.stack.functions,
+        };
+
+        let res = crate::stack::stack_init_safe(&mut stack, handle.ptr, handle.len as u32);
+
+        match res {
+            Ok(_) => {
+                write_test_result(
+                    stack_tester.writer,
+                    false,
+                    "stack::tests::test_init_zero_length_fails init zero length fails",
+                );
+            }
+            Err(e) => {
+                write_test_result(
+                    stack_tester.writer,
+                    e.kind == ErrorKind::InvalidArguments,
+                    "stack::tests::test_init_zero_length_fails init zero length fails",
+                );
+            }
+        }
+    }
+
+    /// Test that init at the end of memory works
+    pub fn test_init_end_of_memory_works(stack_tester: &mut StackTester) {
+        let mut arr: [u32; 1] = [0; 1];
+        let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+
+        let stack_struct = StackStruct {
+            len: 0,
+            bottom: core::ptr::null_mut::<u32>(),
+            top: core::ptr::null_mut::<u32>(),
+            maximum_top: core::ptr::null_mut::<u32>(),
+            _marker: PhantomData,
+        };
+
+        let mut stack = Stack {
+            stack_struct,
+            functions: stack_tester.stack.functions,
+        };
+
+        let ptr = (u32::MAX - (u32::BITS / 8)) as *mut u32;
+        let res = crate::stack::stack_init_safe(&mut stack, ptr, handle.len as u32);
+
+        write_test_result(
+	    stack_tester.writer,
+	    res.is_ok(),
+	    "stack::tests::test_init_end_of_memory_works init with ptr + length at end of memory should work",
+	);
+    }
+
+    /// Test that init at the end of memory that would wrap fails
+    pub fn test_init_carry_fails(stack_tester: &mut StackTester) {
+        let mut arr: [u32; 1] = [0; 1];
+        let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+
+        let stack_struct = StackStruct {
+            len: 0,
+            bottom: core::ptr::null_mut::<u32>(),
+            top: core::ptr::null_mut::<u32>(),
+            maximum_top: core::ptr::null_mut::<u32>(),
+            _marker: PhantomData,
+        };
+
+        let mut stack = Stack {
+            stack_struct,
+            functions: stack_tester.stack.functions,
+        };
+
+        let ptr = u32::MAX as *mut u32;
+        let res = crate::stack::stack_init_safe(&mut stack, ptr, handle.len as u32);
+
+        match res {
+            Ok(_) => {
+                write_test_result(
+		    stack_tester.writer,
+		    false,
+		    "stack::tests::test_init_carry_fails init with ptr + length that would carry fails",
+		);
+            }
+            Err(e) => {
+                write_test_result(
+		    stack_tester.writer,
+		    e.kind == ErrorKind::InvalidArguments,
+		    "stack::tests::test_init_carry_fails init with ptr + length that would carry fails",
+		);
+            }
+        }
     }
 
     /// Test that pushing a value onto the return stack works
-    pub fn test_push_rsp_works(
-        writer: &mut dyn Write,
-        push_rsp: fn(u32) -> Result<(), crate::error::Error>,
-    ) {
-        let mut stack_pointer_old: u32;
+    pub fn test_push_works(stack_tester: &mut StackTester) {
+        let stack_pointer_old = stack_tester.stack.stack_struct.top;
 
-        unsafe {
-            asm!(
-                "mov {}, r5",
-                out(reg) stack_pointer_old,
-                options(nomem, nostack, preserves_flags));
-        }
-        write!(
-            writer,
-            "Current value of stack pointer: 0x{:X}\r\n",
-            stack_pointer_old
-        )
-        .unwrap();
+        let res = stack_tester.stack.push(3);
+        write_test_result(
+            stack_tester.writer,
+            res.is_ok(),
+            "stack::tests::test_push_works push result was ok",
+        );
 
-        let _res = push_rsp(3);
+        let stack_pointer_new = stack_tester.stack.stack_struct.top;
 
-        let mut stack_pointer_new: u32;
-        unsafe {
-            asm!(
-                "mov {}, r5",
-                out(reg) stack_pointer_new,
-                options(nomem, nostack, preserves_flags));
-        }
-
-        write!(
-            writer,
-            "New value of stack pointer: 0x{:X}\r\n",
-            stack_pointer_new
-        )
-        .unwrap();
-
-        assert_eq!(stack_pointer_old - stack_pointer_new, 4);
+        write_test_result(
+            stack_tester.writer,
+            stack_pointer_new as usize == stack_pointer_old as usize - 4,
+            "stack::tests::test_push_works stack pointer is decremented by proper ammount",
+        );
+        assert_eq!(stack_pointer_old as usize - stack_pointer_new as usize, 4);
     }
 
     /// Test that pushing a value on a full stack fails
-    pub fn test_pushrsp_stack_overflow_fails(stack_tester: &StackTester) {
-        for _i in 0..512 {
-            let res = (stack_tester.stack.functions.push)(3);
+    pub fn test_stack_overflow_fails(stack_tester: &mut StackTester) {
+        stack_tester.stack.pop().unwrap();
+
+        let num_items = stack_tester.stack.stack_struct.len;
+        for i in 0..num_items {
+            let res = stack_tester.stack.push(i as u32);
             assert!(res.is_ok());
         }
-        let res = (stack_tester.stack.functions.push)(3);
+
+        let res = stack_tester.stack.push(3);
         assert!(res.is_err());
+
+        // Empty out the stack
+        for _i in 0..num_items {
+            let res = stack_tester.stack.pop();
+            assert!(res.is_ok());
+        }
     }
 
     /// Test that popping a value when there are no values on the
     /// stack fails
-    pub fn test_poprsp_stack_underflow_fails(stack_tester: &StackTester) {
-        let res = (stack_tester.stack.functions.pop)();
+    pub fn test_pop_stack_underflow_fails(stack_tester: &mut StackTester) {
+        let res = stack_tester.stack.pop();
         assert!(res.is_err());
 
-        let res = (stack_tester.stack.functions.pop)();
+        let res = stack_tester.stack.pop();
         assert!(res.is_err());
     }
 
     /// Test that popping value from the return stack works
-    pub fn test_pop_rsp_works(stack_tester: &mut StackTester) {
-        let mut stack_pointer_old: u32;
+    pub fn test_pop_works(stack_tester: &mut StackTester) {
+        let stack_pointer_old = stack_tester.stack.stack_struct.top;
         let test_val: u32 = 0x798C6FD6;
 
-        unsafe {
-            asm!(
-                "mov {}, r5",
-                out(reg) stack_pointer_old,
-                options(nomem, nostack, preserves_flags));
-        }
-        write!(
+        let res = stack_tester.stack.push(test_val);
+        write_test_result(
             stack_tester.writer,
-            "Current value of stack pointer: 0x{:X}\r\n",
-            stack_pointer_old
-        )
-        .unwrap();
+            res.is_ok(),
+            "stack::tests::test_pop_works push result was ok",
+        );
 
-        let _res = (stack_tester.stack.functions.push)(test_val);
+        let stack_pointer_new = stack_tester.stack.stack_struct.top;
 
-        let mut stack_pointer_new: u32;
-        unsafe {
-            asm!(
-                "mov {}, r5",
-                out(reg) stack_pointer_new,
-                options(nomem, nostack, preserves_flags));
-        }
-
-        write!(
+        write_test_result(
             stack_tester.writer,
-            "New value of stack pointer: 0x{:X}\r\n",
-            stack_pointer_new
-        )
-        .unwrap();
+            stack_pointer_new as usize == stack_pointer_old as usize - 4,
+            "stack::tests::test_pop_works stack pointer is decremented by proper ammount",
+        );
+        assert_eq!(stack_pointer_old as usize - stack_pointer_new as usize, 4);
 
-        assert_eq!(stack_pointer_old - stack_pointer_new, 4);
+        let res = stack_tester.stack.pop();
+        write_test_result(
+            stack_tester.writer,
+            res.is_ok(),
+            "stack::tests::test_pop_works pop result was ok",
+        );
 
-        let res = (stack_tester.stack.functions.pop)();
-
-        let mut stack_pointer_new: u32;
-        unsafe {
-            asm!(
-                "mov {}, r5",
-                out(reg) stack_pointer_new,
-                options(nomem, nostack, preserves_flags));
-        }
+        let stack_pointer_new = stack_tester.stack.stack_struct.top;
 
         // Ok, the stack pointer is getting adjusted correctly
-        assert_eq!(stack_pointer_old - stack_pointer_new, 0);
-
-        write!(
+        write_test_result(
             stack_tester.writer,
-            "New value of stack pointer: 0x{:X}\r\n",
-            stack_pointer_new
-        )
-        .unwrap();
+            stack_pointer_new as usize == stack_pointer_old as usize,
+            "stack::tests::test_pop_works stack pointer is incremented by proper ammount",
+        );
+        assert_eq!(stack_pointer_old as usize - stack_pointer_new as usize, 0);
 
         let mut passed = false;
         if let Ok(r) = res {
@@ -290,44 +552,178 @@ pub mod tests {
         write_test_result(
             stack_tester.writer,
             passed,
-            "current value of stack pointer should equal expected",
+            "stack::tests::test_pop_works current value of stack pointer should equal expected",
         );
         assert!(passed);
     }
 
     /// Test that popping two values from the stack works.
-    pub fn test_poprsp_twice_works(stack_tester: &StackTester) {
+    pub fn test_pop_twice_works(stack_tester: &mut StackTester) {
         let test_val_1 = 0x23481801;
         let test_val_2 = 0x25692815;
 
-        let _res = (stack_tester.stack.functions.push)(test_val_1);
-        let _res = (stack_tester.stack.functions.push)(test_val_2);
+        let res = stack_tester.stack.push(test_val_1);
+        write_test_result(
+            stack_tester.writer,
+            res.is_ok(),
+            "stack::tests::test_pop_twice_works first push was ok",
+        );
 
-        let res = (stack_tester.stack.functions.pop)();
+        let res = stack_tester.stack.push(test_val_2);
+        write_test_result(
+            stack_tester.writer,
+            res.is_ok(),
+            "stack::tests::test_pop_twice_works second push was ok",
+        );
+
+        let res = stack_tester.stack.pop();
 
         match res {
-            Ok(v) => assert_eq!(v, test_val_2),
+            Ok(v) => {
+                write_test_result(
+                    stack_tester.writer,
+                    res.is_ok(),
+                    "stack::tests::test_pop_twice_works first pop was ok",
+                );
+                assert_eq!(v, test_val_2)
+            }
             Err(_) => panic!(),
         }
 
-        let res = (stack_tester.stack.functions.pop)();
+        let res = stack_tester.stack.pop();
 
         match res {
-            Ok(v) => assert_eq!(v, test_val_1),
+            Ok(v) => {
+                assert_eq!(v, test_val_1);
+            }
             Err(_) => panic!(),
         }
 
-        let res = (stack_tester.stack.functions.pop)();
+        let res = stack_tester.stack.pop();
         match res {
             Ok(_) => panic!(),
             Err(e) => {
-                assert_eq!(e.kind, crate::error::ErrorKind::StackUnderflow);
+                assert_eq!(e.kind, ErrorKind::StackUnderflow);
             }
         }
     }
 
     /// Test getting the address of the return stack bottom
-    pub fn get_stack_bottom_test(stack_tester: &StackTester) -> u32 {
-        (stack_tester.stack.functions.get_stack_bottom_safe)()
+    pub fn get_stack_bottom_test(stack_tester: &StackTester) -> core::result::Result<u32, Error> {
+        // stack_tester.stack.get_stack_bottom()
+        (stack_tester.stack.functions.get_stack_bottom_safe)(core::ptr::addr_of!(
+            stack_tester.stack.stack_struct
+        ))
+    }
+
+    /// Test that pushing a value on a full stack fails
+    pub fn test_fill_empty_fill_works(stack_tester: &mut StackTester) {
+        let num_items = stack_tester.stack.stack_struct.len;
+
+        let res = stack_tester.stack.pop();
+        assert!(res.is_err());
+
+        // filling the stack should work
+        let mut res: Option<Result<(), Error>> = None;
+        for _i in 0..num_items {
+            let r = stack_tester.stack.push(3);
+            res = Some(r);
+            assert!(res.as_ref().expect("should be Some").is_ok());
+        }
+
+        write_test_result(
+            stack_tester.writer,
+            res.unwrap().is_ok(),
+            "stack::tests::test_fill_empty_fill_works should fill stack",
+        );
+
+        // Pushing onto a full stack should fail
+        let res = stack_tester.stack.push(3);
+        match res {
+            Ok(_) => {
+                write_test_result(
+                    stack_tester.writer,
+                    false,
+                    "stack::tests::test_fill_empty_fill_works overflow should fail",
+                );
+            }
+            Err(e) => {
+                write_test_result(
+                    stack_tester.writer,
+                    e == Error::new(ErrorKind::StackOverflow),
+                    "stack::tests::test_fill_empty_fill_works overflow should fail",
+                );
+            }
+        }
+
+        // Popping every item from a full stack should work
+        for _i in 0..num_items {
+            let res = stack_tester.stack.pop();
+            assert!(res.is_ok());
+        }
+        // Popping from an empty stack should fail
+        let res = stack_tester.stack.pop();
+        assert!(res.is_err());
+
+        // Filling the stack again should work
+        for _i in 0..num_items {
+            let res = stack_tester.stack.push(3);
+            assert!(res.is_ok());
+        }
+        // Pushing onto a full stack should fail
+        let res = stack_tester.stack.push(3);
+        assert!(res.is_err());
+    }
+}
+
+mod doc_tests {
+    use crate::{
+        stack::{Error, Stack, StackFunctions, StackOps, StackStruct},
+        ArrayHandle,
+    };
+
+    pub fn test_push() {
+        let mut arr: [u32; 4] = [0; 4];
+        let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+        let sf = StackFunctions {
+            init: |_stack: *mut StackStruct,
+                   _memory_start: *mut u32,
+                   _stack_len: u32|
+             -> core::result::Result<(), Error> { Ok(()) },
+            push: |_stack: *const StackStruct, _value: u32| -> core::result::Result<(), Error> {
+                Ok(())
+            },
+            pop: |_stack: *const StackStruct| -> core::result::Result<u32, Error> { Ok(0xF4) },
+            get_stack_bottom_safe:
+                |_stack: *const StackStruct| -> core::result::Result<u32, Error> { Ok(0) },
+        };
+        let mut stack = Stack::new(&handle, &sf).unwrap();
+
+        let res = stack.push(0xF4);
+
+        assert!(res.is_ok());
+    }
+    pub fn test_pop() {
+        let mut arr: [u32; 4] = [0; 4];
+        let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+        let sf = StackFunctions {
+            init: |_stack: *mut StackStruct,
+                   _memory_start: *mut u32,
+                   _stack_len: u32|
+             -> core::result::Result<(), Error> { Ok(()) },
+            push: |_stack: *const StackStruct, _value: u32| -> core::result::Result<(), Error> {
+                Ok(())
+            },
+            pop: |_stack: *const StackStruct| -> core::result::Result<u32, Error> { Ok(0x35) },
+            get_stack_bottom_safe:
+                |_stack: *const StackStruct| -> core::result::Result<u32, Error> { Ok(0) },
+        };
+
+        let mut stack = Stack::new(&handle, &sf).unwrap();
+
+        let _res = stack.push(0x35);
+        let res = stack.pop().unwrap();
+
+        assert_eq!(res, 0x35);
     }
 }

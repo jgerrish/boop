@@ -3,12 +3,51 @@
 #![warn(missing_docs)]
 #![no_std]
 
-use core::fmt::Write;
+use core::{
+    fmt::{Debug, Formatter, Write},
+    marker::PhantomData,
+};
 
 pub mod buffer;
 pub mod dict;
 pub mod error;
 pub mod stack;
+
+/// A handle to an array to manage lifetimes and concurrency
+pub struct ArrayHandle<'a, T> {
+    /// Pointer to the array
+    pub ptr: *mut T,
+    /// Length of the array
+    pub len: usize,
+    /// We want to have a lifetime on an ArrayHandle tied to the data
+    pub _marker: PhantomData<&'a T>,
+}
+
+impl<'a, T> ArrayHandle<'a, T> {
+    /// Create a new ArrayHandle from an array pointer and length.
+    ///
+    /// # Examples
+    /// ```
+    /// use crate::ArrayHandle;
+    ///
+    /// let mut arr: [u32; 4] = [0; 4];
+    /// let _handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+    /// ```
+    pub fn new(ptr: *mut T, len: usize) -> Self {
+        ArrayHandle {
+            ptr,
+            len,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Debug for ArrayHandle<'a, T> {
+    fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
+        write!(f, "ptr: 0x{:X}", self.ptr as usize)?;
+        write!(f, ", len: 0x{:X}", self.len)
+    }
+}
 
 /// Initialization of the boop system
 pub fn init(writer: &mut dyn Write, mpu: &cortex_m::peripheral::MPU) {
