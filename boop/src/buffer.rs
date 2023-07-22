@@ -23,6 +23,59 @@ pub trait Queue {
     /// This function is primarily used for testing purposes.  Most
     /// users should use the new function.
     ///
+    /// # Examples
+    /// ```
+    /// use crate::{
+    ///     buffer::{Buffer, BufferFunctions, BufferStruct, Error, Queue},
+    ///     ArrayHandle,
+    /// };
+    /// use core::marker::PhantomData;
+    ///
+    /// let mut array: [u32; 4] = [0; 4];
+    /// let handle = ArrayHandle::new(array.as_mut_ptr(), array.len());
+    ///
+    /// // This is a mock BufferFunctions structure
+    /// // In a real program you would use the real FFI interface
+    /// // Look at the corresponding implementation crate for Cortex-M
+    /// // devices in this project
+    /// let bf = BufferFunctions {
+    ///     buffer_init_safe: |_buffer: *const BufferStruct,
+    ///                        _buffer_start: *const u32,
+    ///                        _buffer_end: *const u32|
+    ///      -> core::result::Result<(), Error> { Ok(()) },
+    ///     buffer_clear_safe: |_buffer: *const BufferStruct| -> core::result::Result<(), Error> {
+    ///         Ok(())
+    ///     },
+    ///     buffer_write_word_safe: |_buffer: *const BufferStruct,
+    ///                              _value: u32|
+    ///      -> core::result::Result<(), Error> { Ok(()) },
+    ///     buffer_read_word_safe:
+    ///         |_buffer: *const BufferStruct| -> core::result::Result<u32, Error> { Ok(0xA0) },
+    /// };
+    ///
+    /// let buffer_addr = handle.ptr as *mut u32;
+    ///
+    /// let buffer_len = handle.len;
+    /// let buffer_size = buffer_len * core::mem::size_of::<u32>();
+    /// let buffer_end: *const u32 =
+    ///     (buffer_addr as usize + buffer_size - core::mem::size_of::<u32>()) as *const u32;
+    ///
+    /// let mut buffer = Buffer {
+    ///     handle: &handle,
+    ///     buffer: BufferStruct {
+    ///         start: core::ptr::null::<u32>() as *const u32,
+    ///         end: core::ptr::null::<u32>() as *const u32,
+    ///         currkey: core::ptr::null_mut::<u32>() as *mut u32,
+    ///         bufftop: core::ptr::null_mut::<u32>() as *mut u32,
+    ///         _marker: PhantomData,
+    ///     },
+    ///     functions: bf,
+    /// };
+    ///
+    /// let res = unsafe { buffer.init(buffer_addr, buffer_end) };
+    ///
+    /// assert!(res.is_ok());
+    /// ```
     unsafe fn init(
         &mut self,
         buffer_start: *const u32,
@@ -30,27 +83,114 @@ pub trait Queue {
     ) -> core::result::Result<(), Error>;
 
     /// Clear the queue
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crate::{
+    ///     ArrayHandle,
+    ///     buffer::{Error, Buffer, BufferFunctions, BufferStruct, Queue}
+    /// };
+    ///
+    /// let mut array: [u32; 4] = [0; 4];
+    /// let handle = ArrayHandle::new(array.as_mut_ptr(), array.len());
+    ///
+    /// // This is a mock BufferFunctions structure
+    /// // In a real program you would use the real FFI interface
+    /// // Look at the corresponding implementation crate for Cortex-M
+    /// // devices in this project
+    /// let bf = BufferFunctions {
+    ///     buffer_init_safe: |_buffer: *const BufferStruct,
+    ///     _buffer_start: *const u32,
+    ///     _buffer_end: *const u32|
+    ///  -> core::result::Result<(), Error> { Ok(()) },
+    ///     buffer_clear_safe: |_buffer: *const BufferStruct| -> core::result::Result<(), Error> {
+    ///         Ok(())
+    ///     },
+    ///     buffer_write_word_safe: |_buffer: *const BufferStruct, _value: u32| -> core::result::Result<(), Error> { Ok(()) },
+    ///     buffer_read_word_safe:
+    ///     |_buffer: *const BufferStruct| -> core::result::Result<u32, Error> { Ok(0xA0) },
+    /// };
+    ///
+    /// let mut buffer = Buffer::new(&handle, bf).unwrap();
+    /// let res = buffer.clear();
+    /// assert!(res.is_ok());
+    /// ```
     fn clear(&mut self) -> core::result::Result<(), Error>;
 
     /// Get an item from the queue
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crate::{
+    ///     ArrayHandle,
+    ///     buffer::{Error, Buffer, BufferFunctions, BufferStruct, Queue}
+    /// };
+    ///
+    /// let mut array: [u32; 4] = [0; 4];
+    /// let handle = ArrayHandle::new(array.as_mut_ptr(), array.len());
+    ///
+    /// // This is a mock BufferFunctions structure
+    /// // In a real program you would use the real FFI interface
+    /// // Look at the corresponding implementation crate for Cortex-M
+    /// // devices in this project
+    /// let bf = BufferFunctions {
+    ///     buffer_init_safe: |_buffer: *const BufferStruct,
+    ///     _buffer_start: *const u32,
+    ///     _buffer_end: *const u32|
+    ///  -> core::result::Result<(), Error> { Ok(()) },
+    ///     buffer_clear_safe: |_buffer: *const BufferStruct| -> core::result::Result<(), Error> {
+    ///         Ok(())
+    ///     },
+    ///     buffer_write_word_safe: |_buffer: *const BufferStruct, _value: u32| -> core::result::Result<(), Error> { Ok(()) },
+    ///     buffer_read_word_safe:
+    ///     |_buffer: *const BufferStruct| -> core::result::Result<u32, Error> { Ok(0xA0) },
+    /// };
+    ///
+    /// let mut buffer = Buffer::new(&handle, bf).unwrap();
+    /// buffer.put(0xA0).unwrap();
+    /// let res = buffer.get();
+    /// assert!(res.is_ok());
+    /// assert_eq!(res.expect("Get an Ok result"), 0xA0);
+    /// ```
     fn get(&mut self) -> core::result::Result<u32, Error>;
 
     /// Put an item into the queue
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crate::{
+    ///     ArrayHandle,
+    ///     buffer::{Error, Buffer, BufferFunctions, BufferStruct, Queue}
+    /// };
+    ///
+    /// let mut array: [u32; 4] = [0; 4];
+    /// let handle = ArrayHandle::new(array.as_mut_ptr(), array.len());
+    ///
+    /// // This is a mock BufferFunctions structure
+    /// // In a real program you would use the real FFI interface
+    /// // Look at the corresponding implementation crate for Cortex-M
+    /// // devices in this project
+    /// let bf = BufferFunctions {
+    ///     buffer_init_safe: |_buffer: *const BufferStruct,
+    ///     _buffer_start: *const u32,
+    ///     _buffer_end: *const u32|
+    ///  -> core::result::Result<(), Error> { Ok(()) },
+    ///     buffer_clear_safe: |_buffer: *const BufferStruct| -> core::result::Result<(), Error> {
+    ///         Ok(())
+    ///     },
+    ///     buffer_write_word_safe: |_buffer: *const BufferStruct, _value: u32| -> core::result::Result<(), Error> { Ok(()) },
+    ///     buffer_read_word_safe:
+    ///     |_buffer: *const BufferStruct| -> core::result::Result<u32, Error> { Ok(0xA0) },
+    /// };
+    ///
+    /// let mut buffer = Buffer::new(&handle, bf).unwrap();
+    /// let res = buffer.put(0xA0);
+    /// assert!(res.is_ok());
+    /// ```
     fn put(&mut self, item: u32) -> core::result::Result<(), Error>;
-}
-
-/// Settings for a buffer or queue
-pub struct BufferSettings {
-    /// Buffer address
-    pub buffer_addr: *const u32,
-    /// Buffer length
-    /// This is the length in terms of the number of elements it can
-    /// store, plus one (it includes the sentinel element).
-    /// For 32-bit elements, the length won't equal the size.
-    /// The size is four times the length.
-    pub buffer_len: usize,
-    /// Buffer end
-    pub buffer_end: *const u32,
 }
 
 /// This is the basic structure for a buffer object used by the
@@ -109,8 +249,6 @@ pub struct Buffer<'a> {
     pub handle: &'a ArrayHandle<'a, u32>,
     /// The native buffer pointers
     pub buffer: BufferStruct<'a>,
-    /// Settings for the buffer
-    pub settings: BufferSettings,
     /// Functions for the buffer
     pub functions: BufferFunctions,
 }
@@ -170,15 +308,10 @@ impl<'a> Buffer<'a> {
                 bufftop: core::ptr::null_mut::<u32>() as *mut u32,
                 _marker: PhantomData,
             },
-            settings: BufferSettings {
-                buffer_addr,
-                buffer_len,
-                buffer_end,
-            },
             functions,
         };
 
-        let res = unsafe { buffer.init(buffer.settings.buffer_addr, buffer.settings.buffer_end) };
+        let res = unsafe { buffer.init(buffer_addr, buffer_end) };
 
         match res {
             Ok(()) => Ok(buffer),
@@ -277,27 +410,20 @@ impl Debug for ErrorKind {
 
 /// Run the buffer tests
 pub fn run_tests(buffer_tester: &mut BufferTester) {
+    let buffer_addr = buffer_tester.buffer.handle.ptr as *mut u32;
+    let buffer_size = buffer_tester.buffer.handle.len * core::mem::size_of::<u32>();
+    let buffer_end: *const u32 =
+        (buffer_addr as usize + buffer_size - core::mem::size_of::<u32>()) as *const u32;
+
     unsafe {
-        buffer_tester
-            .buffer
-            .init(
-                buffer_tester.buffer.settings.buffer_addr,
-                buffer_tester.buffer.settings.buffer_end,
-            )
-            .unwrap();
+        buffer_tester.buffer.init(buffer_addr, buffer_end).unwrap();
     }
 
     tests::test_write_word(buffer_tester, 0x34852052);
 
     // reset for the next test
     unsafe {
-        buffer_tester
-            .buffer
-            .init(
-                buffer_tester.buffer.settings.buffer_addr,
-                buffer_tester.buffer.settings.buffer_end,
-            )
-            .unwrap();
+        buffer_tester.buffer.init(buffer_addr, buffer_end).unwrap();
     }
 
     // Test the clear function
@@ -355,10 +481,7 @@ pub fn run_tests(buffer_tester: &mut BufferTester) {
 #[allow(unused_imports)]
 pub mod tests {
     use crate::{
-        buffer::{
-            Buffer, BufferFunctions, BufferSettings, BufferStruct, BufferTester, Error, ErrorKind,
-            Queue,
-        },
+        buffer::{Buffer, BufferFunctions, BufferStruct, BufferTester, Error, ErrorKind, Queue},
         tests::write_test_result,
         ArrayHandle,
     };
@@ -389,7 +512,7 @@ pub mod tests {
         assert!(res.is_err());
 
         // Test that the full buffer space is available after clearing
-        let buffer_len = buffer_tester.buffer.settings.buffer_len;
+        let buffer_len = buffer_tester.buffer.handle.len;
 
         let mut cnt = 0;
         for i in 0..buffer_len - 1 {
@@ -678,7 +801,7 @@ pub mod tests {
 
     /// Test that writing more than the buffer size fails
     pub fn test_simple_buffer_overflow_fails(buffer_tester: &mut BufferTester) {
-        let buffer_len = buffer_tester.buffer.settings.buffer_len as u32;
+        let buffer_len = buffer_tester.buffer.handle.len as u32;
 
         for i in 0..buffer_len - 1 {
             let res = buffer_tester.buffer.put(i);
@@ -716,7 +839,7 @@ pub mod tests {
     /// This is a complicated test where we write and read a word
     /// first, then fill the buffer
     pub fn test_complex_buffer_overflow_fails(buffer_tester: &mut BufferTester, word: u32) {
-        let buffer_len = buffer_tester.buffer.settings.buffer_len as u32;
+        let buffer_len = buffer_tester.buffer.handle.len as u32;
 
         let res = buffer_tester.buffer.put(word);
         write_test_result(
