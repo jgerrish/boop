@@ -5,7 +5,9 @@
 //! with serial input and output and UTF-32 representation.
 #![warn(missing_docs)]
 
-use core::fmt::Write;
+use core::{fmt::Write, marker::PhantomData};
+
+use crate::ArrayHandle;
 
 /// The basic operations for a queue
 pub trait Queue {
@@ -60,7 +62,7 @@ pub struct BufferSettings {
 /// data.  The semantics of that cast aren't quite clear, and maybe
 /// they should all be mut pointers.
 #[repr(C)]
-pub struct BufferStruct {
+pub struct BufferStruct<'a> {
     /// The start of the buffer
     pub start: *const u32,
     /// The end of the buffer
@@ -69,10 +71,12 @@ pub struct BufferStruct {
     pub currkey: *mut u32,
     /// The current top
     pub bufftop: *mut u32,
+    /// Marker so we can link lifetimes to the backing array
+    _marker: PhantomData<&'a u32>,
 }
 
 /// Debug formatter implementation for BufferStruct
-impl Debug for BufferStruct {
+impl Debug for BufferStruct<'_> {
     fn fmt(&self, f: &mut Formatter) -> Result {
         write!(f, "  currkey: 0x{:02X}", &(self.currkey as usize))?;
         write!(f, ", bufftop: 0x{:02X}", &(self.bufftop as usize))?;
@@ -84,7 +88,7 @@ impl Debug for BufferStruct {
 
 /// Collection of functions for the buffer data structure
 /// This is primarily used to make testing easier
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy)]
 pub struct BufferFunctions {
     /// The initialization function for the buffer
     pub buffer_init_safe:
@@ -100,11 +104,11 @@ pub struct BufferFunctions {
 
 /// Circular buffer array-based implementation for a queue
 #[allow(dead_code)]
-pub struct Buffer<const SIZE: usize> {
-    /// The actual buffer array
-    data: *const [u32; SIZE],
+pub struct Buffer<'a> {
+    /// The handle to the buffer array
+    pub handle: &'a ArrayHandle<'a, u32>,
     /// The native buffer pointers
-    pub buffer: BufferStruct,
+    pub buffer: BufferStruct<'a>,
     /// Settings for the buffer
     pub settings: BufferSettings,
     /// Functions for the buffer
@@ -112,21 +116,21 @@ pub struct Buffer<const SIZE: usize> {
 }
 
 /// Debug formatter implementation for Buffer
-impl<const SIZE: usize> Debug for Buffer<SIZE> {
+impl<'a> Debug for Buffer<'a> {
     fn fmt(&self, f: &mut Formatter) -> Result {
         write!(f, "{:?}", self.buffer)
     }
 }
 
 /// Create a testing structure to run tests against a buffer
-pub struct BufferTester<'a, const SIZE: usize> {
+pub struct BufferTester<'a> {
     /// The Buffer structure to test
-    pub buffer: Buffer<SIZE>,
+    pub buffer: Buffer<'a>,
     /// The output stream for writing debug and log messages
     pub writer: &'a mut dyn Write,
 }
 
-impl<const SIZE: usize> Buffer<SIZE> {
+impl<'a> Buffer<'a> {
     /// Create a new buffer
     ///
     /// This takes ownership of the array, which is owned by the new
@@ -143,27 +147,28 @@ impl<const SIZE: usize> Buffer<SIZE> {
     /// require a custom allocator: The Embedded Rust Book has some
     /// info on that.
     pub fn new(
-        data: &mut [u32; SIZE],
+        handle: &'a ArrayHandle<'a, u32>,
         functions: BufferFunctions,
-    ) -> core::result::Result<Buffer<SIZE>, Error> {
+    ) -> core::result::Result<Buffer<'a>, Error> {
         // Get the buffer address
         // let buffer_addr = core::ptr::addr_of_mut!(array) as *const [u32; 256];
-        let buffer_addr = data.as_ptr() as *mut u32;
+        let buffer_addr = handle.ptr as *mut u32;
 
         // len() returns the length in terms of number of elements,
         // not the size
-        let buffer_len = data.len();
+        let buffer_len = handle.len;
         let buffer_size = buffer_len * core::mem::size_of::<u32>();
         let buffer_end: *const u32 =
             (buffer_addr as usize + buffer_size - core::mem::size_of::<u32>()) as *const u32;
 
         let mut buffer = Buffer {
-            data,
+            handle,
             buffer: BufferStruct {
                 start: core::ptr::null::<u32>() as *const u32,
                 end: core::ptr::null::<u32>() as *const u32,
                 currkey: core::ptr::null_mut::<u32>() as *mut u32,
                 bufftop: core::ptr::null_mut::<u32>() as *mut u32,
+                _marker: PhantomData,
             },
             settings: BufferSettings {
                 buffer_addr,
@@ -182,7 +187,7 @@ impl<const SIZE: usize> Buffer<SIZE> {
     }
 }
 
-impl<const SIZE: usize> Queue for Buffer<SIZE> {
+impl<'a> Queue for Buffer<'a> {
     /// Initialize the buffer
     unsafe fn init(
         &mut self,
@@ -271,7 +276,7 @@ impl Debug for ErrorKind {
 }
 
 /// Run the buffer tests
-pub fn run_tests<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
+pub fn run_tests(buffer_tester: &mut BufferTester) {
     unsafe {
         buffer_tester
             .buffer
@@ -355,11 +360,12 @@ pub mod tests {
             Queue,
         },
         tests::write_test_result,
+        ArrayHandle,
     };
     use core::{arch::asm, fmt::Write};
 
     /// Test that writing a buffer clears it
-    pub fn test_clear_works<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
+    pub fn test_clear_works(buffer_tester: &mut BufferTester) {
         let word: u32 = 0x23681068;
         let res = buffer_tester.buffer.put(word);
         assert!(res.is_ok());
@@ -409,7 +415,7 @@ pub mod tests {
     }
 
     /// Test that writing a word works
-    pub fn test_write_word<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>, word: u32) {
+    pub fn test_write_word(buffer_tester: &mut BufferTester, word: u32) {
         let res = buffer_tester.buffer.put(word);
 
         write_test_result(
@@ -421,7 +427,7 @@ pub mod tests {
     }
 
     /// Test that reading a word works
-    pub fn test_read_word<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>, word: u32) {
+    pub fn test_read_word(buffer_tester: &mut BufferTester, word: u32) {
         let res = buffer_tester.buffer.put(word);
         write_test_result(
             buffer_tester.writer,
@@ -458,11 +464,7 @@ pub mod tests {
     }
 
     /// Test that reading two word works
-    pub fn test_read_two_words_works<const SIZE: usize>(
-        buffer_tester: &mut BufferTester<SIZE>,
-        word1: u32,
-        word2: u32,
-    ) {
+    pub fn test_read_two_words_works(buffer_tester: &mut BufferTester, word1: u32, word2: u32) {
         let res = buffer_tester.buffer.put(word1);
         write_test_result(
             buffer_tester.writer,
@@ -533,10 +535,7 @@ pub mod tests {
     }
 
     /// Test that reading more words than available fails
-    pub fn test_read_word_empty_fails<const SIZE: usize>(
-        buffer_tester: &mut BufferTester<SIZE>,
-        word: u32,
-    ) {
+    pub fn test_read_word_empty_fails(buffer_tester: &mut BufferTester, word: u32) {
         let res = buffer_tester.buffer.put(word);
         write_test_result(
             buffer_tester.writer,
@@ -599,10 +598,7 @@ pub mod tests {
     }
 
     /// Test writing and reading a word after a read failure
-    pub fn test_write_and_read_after_read_fail_works<const SIZE: usize>(
-        buffer_tester: &mut BufferTester<SIZE>,
-        word: u32,
-    ) {
+    pub fn test_write_and_read_after_read_fail_works(buffer_tester: &mut BufferTester, word: u32) {
         let res = buffer_tester.buffer.put(word);
         write_test_result(
             buffer_tester.writer,
@@ -681,9 +677,7 @@ pub mod tests {
     }
 
     /// Test that writing more than the buffer size fails
-    pub fn test_simple_buffer_overflow_fails<const SIZE: usize>(
-        buffer_tester: &mut BufferTester<SIZE>,
-    ) {
+    pub fn test_simple_buffer_overflow_fails(buffer_tester: &mut BufferTester) {
         let buffer_len = buffer_tester.buffer.settings.buffer_len as u32;
 
         for i in 0..buffer_len - 1 {
@@ -721,10 +715,7 @@ pub mod tests {
     /// Test that writing more than the buffer size fails
     /// This is a complicated test where we write and read a word
     /// first, then fill the buffer
-    pub fn test_complex_buffer_overflow_fails<const SIZE: usize>(
-        buffer_tester: &mut BufferTester<SIZE>,
-        word: u32,
-    ) {
+    pub fn test_complex_buffer_overflow_fails(buffer_tester: &mut BufferTester, word: u32) {
         let buffer_len = buffer_tester.buffer.settings.buffer_len as u32;
 
         let res = buffer_tester.buffer.put(word);
@@ -787,8 +778,9 @@ pub mod tests {
     pub fn test_queue_head_wraps_works(writer: &mut dyn Write, functions: BufferFunctions) {
         // Test with a smaller test case
         let mut array: [u32; 4] = [0; 4];
+        let handle = ArrayHandle::new(array.as_mut_ptr(), array.len());
 
-        let buffer = Buffer::new(&mut array, functions).unwrap();
+        let buffer = Buffer::new(&handle, functions).unwrap();
 
         let mut buffer_tester = BufferTester { buffer, writer };
         // Iterate through [1, 2, 3]
@@ -838,8 +830,9 @@ pub mod tests {
     ) {
         // Test with a smaller test case
         let mut array: [u32; 4] = [0; 4];
+        let handle = ArrayHandle::new(array.as_mut_ptr(), array.len());
 
-        let buffer = Buffer::new(&mut array, functions).unwrap();
+        let buffer = Buffer::new(&handle, functions).unwrap();
 
         let mut buffer_tester = BufferTester { buffer, writer };
 
@@ -897,8 +890,9 @@ pub mod tests {
     ) {
         // Test with a smaller test case
         let mut array: [u32; 4] = [0; 4];
+        let handle = ArrayHandle::new(array.as_mut_ptr(), array.len());
 
-        let buffer = Buffer::new(&mut array, functions).unwrap();
+        let buffer = Buffer::new(&handle, functions).unwrap();
 
         let mut buffer_tester = BufferTester { buffer, writer };
 
@@ -954,8 +948,9 @@ pub mod tests {
     pub fn test_queue_last_head_update(writer: &mut dyn Write, functions: BufferFunctions) {
         // Test with a smaller test case
         let mut array: [u32; 4] = [0; 4];
+        let handle = ArrayHandle::new(array.as_mut_ptr(), array.len());
 
-        let buffer = Buffer::new(&mut array, functions).unwrap();
+        let buffer = Buffer::new(&handle, functions).unwrap();
 
         let mut buffer_tester = BufferTester { buffer, writer };
 
@@ -1015,7 +1010,7 @@ pub mod tests {
     }
 
     /// Calling init with a null pointer should fail
-    pub fn test_init_null_pointer_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
+    pub fn test_init_null_pointer_fails(buffer_tester: &mut BufferTester) {
         let addr = core::ptr::null_mut() as *mut BufferStruct;
         let start_addr = core::ptr::null_mut() as *mut u32;
         let end_addr = core::ptr::null() as *const u32;
@@ -1046,7 +1041,7 @@ pub mod tests {
     }
 
     /// Calling get with a null pointer should fail
-    pub fn test_get_null_pointer_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
+    pub fn test_get_null_pointer_fails(buffer_tester: &mut BufferTester) {
         let addr = core::ptr::null_mut() as *mut BufferStruct;
         let res = unsafe { (buffer_tester.buffer.functions.buffer_read_word_safe)(addr) };
 
@@ -1072,7 +1067,7 @@ pub mod tests {
     }
 
     /// Calling put with a null pointer should fail
-    pub fn test_put_null_pointer_fails<const SIZE: usize>(buffer_tester: &mut BufferTester<SIZE>) {
+    pub fn test_put_null_pointer_fails(buffer_tester: &mut BufferTester) {
         let addr = core::ptr::null_mut() as *mut BufferStruct;
         let word: u32 = 0x23681068;
 
@@ -1100,9 +1095,7 @@ pub mod tests {
     }
 
     /// Calling clear with a null pointer should fail
-    pub fn test_clear_null_pointer_fails<const SIZE: usize>(
-        buffer_tester: &mut BufferTester<SIZE>,
-    ) {
+    pub fn test_clear_null_pointer_fails(buffer_tester: &mut BufferTester) {
         let addr = core::ptr::null_mut() as *mut BufferStruct;
         let res = unsafe { (buffer_tester.buffer.functions.buffer_clear_safe)(addr) };
 

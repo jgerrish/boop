@@ -11,6 +11,7 @@ use stm32f1xx_hal as _;
 use boop::{
     buffer::{Buffer, BufferTester},
     stack::{Stack, StackTester},
+    ArrayHandle,
 };
 
 use boop_stm32f1::{
@@ -68,9 +69,10 @@ fn run_buffer_tests(writer: &mut dyn Write) {
     // static mut forth_test_buffer: [u32; 256] = [0; 256];
 
     let mut array: [u32; 256] = [0; 256];
+    let handle = ArrayHandle::new(array.as_mut_ptr(), array.len());
 
     let buffer = Buffer::new(
-        &mut array,
+        &handle,
         boop::buffer::BufferFunctions {
             buffer_init_safe,
             buffer_clear_safe,

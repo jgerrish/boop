@@ -56,7 +56,16 @@ pub static mut FORTH_RETURN_STACK_HANDLE: Mutex<RefCell<Option<ArrayHandle<u32>>
 /// type size is four bytes, then the number of items that can be
 /// stored is 255, not 256.
 #[link_section = ".ram2bss"]
-pub static mut FORTH_BUFFER: [u32; 256] = [0; 256];
+static mut FORTH_BUFFER: [u32; 256] = [0; 256];
+
+/// wrapper around the buffer
+pub static mut FORTH_BUFFER_HANDLE: Mutex<RefCell<Option<ArrayHandle<u32>>>> = unsafe {
+    Mutex::new(RefCell::new(Some(ArrayHandle {
+        ptr: FORTH_BUFFER.as_mut_ptr(),
+        len: FORTH_BUFFER.len(),
+        _marker: PhantomData,
+    })))
+};
 
 /// temporary buffer to store UTF-32 encoded strings
 #[link_section = ".ram2bss"]
