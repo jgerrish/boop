@@ -10,6 +10,7 @@ use stm32f1xx_hal as _;
 
 use boop::{
     buffer::{Buffer, BufferTester},
+    pstring::{PString, PStringTester},
     stack::{Stack, StackTester},
     ArrayHandle,
 };
@@ -17,8 +18,9 @@ use boop::{
 use boop_stm32f1::{
     buffer_clear_safe, buffer_init_safe, buffer_read_word_safe, buffer_write_word_safe,
     dict_add_word_safe, dict_encode_ascii_as_utf32_safe, dict_encode_ascii_string_as_utf32_safe,
-    dict_find_safe, dict_init_safe, dict_word_length_safe, get_stack_bottom_safe, stack_init_safe,
-    stack_pop_safe, stack_push_safe, start_safe, FORTH_RETURN_STACK_HANDLE,
+    dict_find_safe, dict_init_safe, dict_pstring_add_pstring_safe, dict_pstring_copy_safe,
+    dict_word_length_safe, get_stack_bottom_safe, pstring_init_safe, pstring_put_safe,
+    stack_init_safe, stack_pop_safe, stack_push_safe, start_safe, FORTH_RETURN_STACK_HANDLE,
 };
 
 // use cortex_m::iprintln;
@@ -122,6 +124,25 @@ fn run_stack_tests(writer: &mut dyn Write) {
     };
 }
 
+/// Run the PString tests
+fn run_pstring_tests(writer: &mut dyn Write) {
+    let mut arr: [u32; 31] = [0; 31];
+    let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+
+    let functions = boop::pstring::PStringFunctions {
+        pstring_init_safe,
+        pstring_put_safe,
+    };
+
+    // initialize the pstring
+    let res = PString::new(&handle, &functions);
+
+    let pstring = res.unwrap();
+
+    let mut pstring_tester = PStringTester { pstring, writer };
+    boop::pstring::run_tests(&mut pstring_tester);
+}
+
 fn run_dict_tests(writer: &mut dyn Write) {
     let dictionary_addr = unsafe { boop_stm32f1::FORTH_DICTIONARY.as_ptr() as *mut &'static [u32] };
 
@@ -142,6 +163,14 @@ fn run_dict_tests(writer: &mut dyn Write) {
             dict_encode_ascii_as_utf32_safe,
             dict_encode_ascii_string_as_utf32_safe,
         },
+        boop::pstring::PStringFunctions {
+            pstring_init_safe,
+            pstring_put_safe,
+        },
+        boop::dict::DictPStringFunctions {
+            dict_pstring_copy_safe,
+            dict_pstring_add_pstring_safe,
+        },
     );
 }
 
@@ -149,4 +178,5 @@ fn run_tests(writer: &mut dyn Write) {
     run_stack_tests(writer);
     run_buffer_tests(writer);
     run_dict_tests(writer);
+    run_pstring_tests(writer);
 }

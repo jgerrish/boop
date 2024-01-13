@@ -21,7 +21,7 @@
  *
  * +-------------------------------------------------------------+
  * | LINK       | i?hnnnnn | B | O | P | DUP code pointer -------> pointer to DUP code
- * +- (4 bytes) --byte---- (nnnnn bytes) ------------------------+
+ * +- (4 bytes) --byte---- (nnnnn * 4 bytes) --------------------+
  *
  * length / flag byte:
  *  i:     immediate flag

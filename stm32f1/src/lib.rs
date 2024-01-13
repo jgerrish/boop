@@ -12,6 +12,7 @@ use boop::{
     buffer::BufferStruct,
     dict::{Flag, Word},
     error::Error,
+    pstring::{PString, PStringStringStruct, PStringStruct},
     stack::StackStruct,
     ArrayHandle,
 };
@@ -147,6 +148,30 @@ extern "C" {
 
     /// Find a word in the dictionary
     pub fn dict_find(word_pointer: *const u32, length: u32, result: *mut u32) -> *const u32;
+
+    // PString functions
+
+    /// Initialize a pstring
+    pub fn jjforth_pstring_init(
+        pstring_ptr: *mut PStringStruct,
+        array_ptr: *mut u32,
+        length: u32,
+    ) -> u32;
+
+    /// Append a character to a pstring
+    pub fn jjforth_pstring_put(pstring_ptr: *const PStringStruct, character: u32) -> u32;
+
+    /// Copy a pstring into a dictionary entry
+    /// The word pointer shouldn't be a u32, the length field is
+    /// currently a byte, and operations in the assembly code occur on
+    /// byte boundaries, so we should treat it as a u8 pointer.
+    pub fn jjforth_dict_pstring_copy(
+        word_pointer: *const u8,
+        pstring_pointer: *const PStringStringStruct,
+    ) -> u32;
+
+    /// Add a pstring to a dictionary
+    pub fn jjforth_dict_pstring_add_pstring(pstring_ptr: *const PStringStruct, flags: u8) -> u32;
 }
 
 // Wrapper functions for the assembly code
@@ -454,7 +479,9 @@ pub fn dict_add_word_safe(word: &str, flags: &[Flag]) -> Result<(), Error> {
         3 => Err(boop::error::Error::new(
             boop::error::ErrorKind::WordTooShort,
         )),
-        _ => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown)),
+        code => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown(
+            code,
+        ))),
     }
 }
 
@@ -501,12 +528,15 @@ pub fn dict_find_safe(word: &str) -> Result<Word, Error> {
                 length: word_len,
                 flags,
                 word: slice,
+                ptr: res,
             })
         }
         1 => Err(boop::error::Error::new(
             boop::error::ErrorKind::WordNotFound,
         )),
-        _ => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown)),
+        code => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown(
+            code,
+        ))),
     }
 }
 
@@ -520,7 +550,9 @@ pub fn dict_encode_ascii_as_utf32_safe(character: u32) -> Result<u32, Error> {
     match result {
         0 => Ok(res),
         1 => Err(boop::error::Error::new(boop::error::ErrorKind::ASCIIEncode)),
-        _ => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown)),
+        code => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown(
+            code,
+        ))),
     }
 }
 
@@ -539,6 +571,93 @@ pub fn dict_encode_ascii_string_as_utf32_safe(src: &[u8], dst: *mut u32) -> Resu
         2 => Err(boop::error::Error::new(
             boop::error::ErrorKind::WordTooShort,
         )),
-        _ => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown)),
+        code => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown(
+            code,
+        ))),
+    }
+}
+
+/// Safe wrapper around jjforth_pstring_init
+pub fn pstring_init_safe(
+    pstring: &mut PString,
+    array_pointer: *mut PStringStringStruct,
+    length: u32,
+) -> Result<(), boop::pstring::Error> {
+    let pstring_ptr = core::ptr::addr_of_mut!(pstring.pstring);
+    let array_ptr = array_pointer as *mut u32;
+    let res = unsafe { jjforth_pstring_init(pstring_ptr, array_ptr, length) };
+    match res {
+        0 => Ok(()),
+        1 => Err(boop::pstring::Error::new(
+            boop::pstring::ErrorKind::NullPointer,
+        )),
+        2 => Err(boop::pstring::Error::new(
+            boop::pstring::ErrorKind::InvalidArguments,
+        )),
+        _ => Err(boop::pstring::Error::new(boop::pstring::ErrorKind::Unknown)),
+    }
+}
+
+/// Safe wrapper around jjforth_pstring_put
+pub fn pstring_put_safe(pstring: &mut PString, character: u32) -> Result<(), boop::pstring::Error> {
+    let pstring_ptr = core::ptr::addr_of_mut!(pstring.pstring);
+    let res = unsafe { jjforth_pstring_put(pstring_ptr, character) };
+
+    match res {
+        0 => Ok(()),
+        1 => Err(boop::pstring::Error::new(
+            boop::pstring::ErrorKind::NullPointer,
+        )),
+        2 => Err(boop::pstring::Error::new(boop::pstring::ErrorKind::Full)),
+        3 => Err(boop::pstring::Error::new(boop::pstring::ErrorKind::Unknown)),
+        _ => Err(boop::pstring::Error::new(boop::pstring::ErrorKind::Unknown)),
+    }
+}
+
+/// Safe wrapper around jjforth_dict_pstring_copy
+pub fn dict_pstring_copy_safe(
+    word: &mut Word,
+    pstring: &mut PString,
+) -> Result<(), boop::error::Error> {
+    let pstr_pstring_ptr: *mut PStringStringStruct = pstring.pstring.data;
+
+    let dict_ptr = word.ptr as *const u8;
+
+    let res = unsafe { jjforth_dict_pstring_copy(dict_ptr, pstr_pstring_ptr) };
+
+    match res {
+        0 => Ok(()),
+        1 => Err(boop::error::Error::new(boop::error::ErrorKind::NullPointer)),
+        code => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown(
+            code,
+        ))),
+    }
+}
+
+/// Safe wrapper around jjforth_dict_pstring_copy
+pub fn dict_pstring_add_pstring_safe(pstring: &mut PString, flags: &[Flag]) -> Result<(), Error> {
+    let pstr_pstring_ptr: *const PStringStruct = core::ptr::addr_of!(pstring.pstring);
+
+    // Set flags
+    let mut flags_byte: u8 = 0x00;
+    for flag in flags {
+        flags_byte |= match flag {
+            Flag::Hidden => 0x20,
+            Flag::Immediate => 0x80,
+        }
+    }
+
+    let res = unsafe { jjforth_dict_pstring_add_pstring(pstr_pstring_ptr, flags_byte) };
+
+    match res {
+        0 => Ok(()),
+        1 => Err(boop::error::Error::new(boop::error::ErrorKind::OutOfMemory)),
+        2 => Err(boop::error::Error::new(boop::error::ErrorKind::WordTooLong)),
+        3 => Err(boop::error::Error::new(
+            boop::error::ErrorKind::WordTooShort,
+        )),
+        code => Err(boop::error::Error::new(boop::error::ErrorKind::Unknown(
+            code,
+        ))),
     }
 }

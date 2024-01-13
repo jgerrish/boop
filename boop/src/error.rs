@@ -39,6 +39,8 @@ pub enum ErrorKind {
     /// This might be confusing, and reworking ASCIIEncode and
     /// UnicodeEncode to be consistent is probably a good idea.
     ASCIIEncode,
+    /// Null pointer error
+    NullPointer,
     /// Out of memory error
     OutOfMemory,
     /// Word not found in dictionary
@@ -54,13 +56,14 @@ pub enum ErrorKind {
     /// An error encoding a value as UTF-32 Unicode
     UnicodeEncode,
     /// An unknown error type
-    Unknown,
+    Unknown(u32),
 }
 
 impl Display for ErrorKind {
     fn fmt(&self, f: &mut Formatter) -> Result {
         match self {
             ErrorKind::ASCIIEncode => write!(f, "ASCII encoding error"),
+            ErrorKind::NullPointer => write!(f, "Null pointer error"),
             ErrorKind::OutOfMemory => write!(f, "Out of Memory"),
             ErrorKind::WordNotFound => write!(f, "Word not found in dictionary"),
             ErrorKind::WordTooLong => write!(f, "Word is too long to add to dictionary"),
@@ -68,7 +71,7 @@ impl Display for ErrorKind {
             ErrorKind::StackOverflow => write!(f, "A stack overflow occurred"),
             ErrorKind::StackUnderflow => write!(f, "A stack underflow occurred"),
             ErrorKind::UnicodeEncode => write!(f, "Unicode encoding error"),
-            ErrorKind::Unknown => write!(f, "An unknown error occurred"),
+            ErrorKind::Unknown(code) => write!(f, "An unknown error occurred: {:?}", code),
         }
     }
 }

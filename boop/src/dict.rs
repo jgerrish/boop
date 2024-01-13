@@ -5,12 +5,13 @@
 //! code.
 #![warn(missing_docs)]
 
-use core::fmt::Write;
+use core::fmt::{Debug, Formatter, Write};
 
 use crate::error::Error;
+use crate::pstring::{PString, PStringFunctions};
 
 /// The different flags a dictionary word can have
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Flag {
     /// If the word is hidden, find won't return it.
     Hidden,
@@ -21,6 +22,10 @@ pub enum Flag {
 /// A simple structure to hold a dictionary word.
 /// This doesn't parse the structure itself, and isa placeholder to get testing
 /// up and running.
+/// This isn't the C representation, this is a higher level representation
+/// that is separate from the assembly code.  For example, the word field
+/// is a reference, not an array.
+#[derive(Clone, Copy)]
 pub struct Word {
     /// The link to the previous word in the dictionary
     pub link: u32,
@@ -30,6 +35,21 @@ pub struct Word {
     pub flags: &'static [Flag],
     /// The word itself
     pub word: &'static [u32],
+    /// Pointer to the native object
+    // This may be a bad practice.
+    // We need to make sure they always stay in sync
+    // It might be better to use "virtual attributes" that are generated
+    // from the underlying representation
+    pub ptr: *const u32,
+}
+
+impl Debug for Word {
+    fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
+        write!(f, "link: 0x{:04X}, ", self.link)?;
+        write!(f, "length: {:?}, ", self.length)?;
+        write!(f, "flags: {:?}, ", self.flags)?;
+        write!(f, "word: {:?}", self.word)
+    }
 }
 
 /// The settings for the dictionary
@@ -57,12 +77,25 @@ pub struct DictFunctions {
     pub dict_encode_ascii_string_as_utf32_safe: fn(&[u8], *mut u32) -> Result<(), Error>,
 }
 
+/// Functions for the dictionary-specific pstring functions
+pub struct DictPStringFunctions {
+    /// PString functions
+
+    /// Copy a PString into a dictionary entry
+    pub dict_pstring_copy_safe: fn(&mut Word, &mut PString) -> Result<(), Error>,
+
+    /// Add a PString into a dictionary
+    pub dict_pstring_add_pstring_safe: fn(&mut PString, &[Flag]) -> Result<(), Error>,
+}
+
 /// Run all the dictionary tests
 pub fn run_tests(
     writer: &mut dyn Write,
     buffer: &mut [u32; 128],
     settings: DictSettings,
     functions: DictFunctions,
+    pstring_functions: PStringFunctions,
+    dict_pstring_functions: DictPStringFunctions,
 ) {
     tests::test_dict_word_length_works(writer, &functions);
     tests::test_dict_encode_ascii_as_utf32_works(writer, &functions);
@@ -71,6 +104,7 @@ pub fn run_tests(
     tests::test_dict_encode_ascii_string_as_utf32_nonascii_fails(writer, buffer, &functions);
     tests::test_dict_find_empty_dictionary_fails(writer, &settings, &functions);
     tests::test_dict_add_word_too_long_fails(writer, &settings, &functions);
+    tests::test_dict_add_word_too_long_by_two_fails(writer, &settings, &functions);
     tests::test_dict_add_word_too_short_fails(writer, &settings, &functions);
     tests::test_dict_add_word_oom_works(writer, &settings, &functions);
     tests::test_dict_add_word_oom_fails(writer, &settings, &functions);
@@ -81,6 +115,36 @@ pub fn run_tests(
     tests::test_dict_add_immediate_word_works(writer, &settings, &functions);
     tests::test_dict_add_chinese_word_works(writer, &settings, &functions);
     tests::test_number_of_characters_in_string_works(writer);
+
+    // Test dict_pstring_copy functions work
+    tests::test_dict_pstring_copy_works(
+        writer,
+        &settings,
+        &pstring_functions,
+        &functions,
+        &dict_pstring_functions,
+    );
+    tests::test_dict_pstring_copy_too_short_fails(
+        writer,
+        &settings,
+        &pstring_functions,
+        &functions,
+        &dict_pstring_functions,
+    );
+    tests::test_dict_pstring_copy_too_long_fails(
+        writer,
+        &settings,
+        &pstring_functions,
+        &functions,
+        &dict_pstring_functions,
+    );
+    tests::test_dict_add_pstring_works(
+        writer,
+        &settings,
+        &pstring_functions,
+        &functions,
+        &dict_pstring_functions,
+    );
 }
 
 /// Get the number of characters in a word, which is different from
@@ -93,8 +157,14 @@ pub fn number_of_characters_in_string(word: &str) -> u32 {
 #[allow(unused_imports)]
 pub mod tests {
     use crate::{
-        dict::{number_of_characters_in_string, DictFunctions, DictSettings, Flag, Word},
+        dict::{
+            number_of_characters_in_string, DictFunctions, DictPStringFunctions, DictSettings,
+            Flag, Word,
+        },
         error::Error,
+        pstring::{PString, PStringFunctions, PStringStruct},
+        tests::write_test_result,
+        ArrayHandle,
     };
     use core::fmt::Write;
 
@@ -104,10 +174,8 @@ pub mod tests {
         settings: &DictSettings,
         functions: &DictFunctions,
     ) {
-        write!(writer, "Initializing dictionary\r\n").unwrap();
         (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
 
-        write!(writer, "Adding word to dictionary\r\n").unwrap();
         let res = (functions.dict_add_word_safe)("STAR", &[]);
 
         match res {
@@ -189,10 +257,8 @@ pub mod tests {
         settings: &DictSettings,
         functions: &DictFunctions,
     ) {
-        write!(writer, "Initializing dictionary\r\n").unwrap();
         (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
 
-        write!(writer, "Adding word to dictionary\r\n").unwrap();
         let res = (functions.dict_add_word_safe)("STAR", &[]);
 
         match res {
@@ -213,12 +279,13 @@ pub mod tests {
         let res = (functions.dict_find_safe)("STAR");
 
         match res {
-            Ok(_v) => {
+            Ok(v) => {
                 write!(
                     writer,
                     "SUCCESS: Succeeded finding added word in dictionary\r\n"
                 )
                 .unwrap();
+                writeln!(writer, "word found: {:?}", v).unwrap();
             }
             Err(e) => {
                 write!(
@@ -344,10 +411,8 @@ pub mod tests {
         settings: &DictSettings,
         functions: &DictFunctions,
     ) {
-        write!(writer, "Initializing dictionary\r\n").unwrap();
         (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
 
-        write!(writer, "Adding word to dictionary\r\n").unwrap();
         let res = (functions.dict_add_word_safe)("STAR", &[]);
 
         match res {
@@ -499,10 +564,8 @@ pub mod tests {
         settings: &DictSettings,
         functions: &DictFunctions,
     ) {
-        write!(writer, "Initializing dictionary\r\n").unwrap();
         (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
 
-        write!(writer, "Adding word to dictionary\r\n").unwrap();
         let res = (functions.dict_add_word_safe)("STAR", &[]);
 
         match res {
@@ -670,6 +733,49 @@ pub mod tests {
 
         write!(writer, "Adding word to dictionary\r\n").unwrap();
         let s = "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEF";
+        write!(
+            writer,
+            "Length of word: {}\r\n",
+            number_of_characters_in_string(s)
+        )
+        .unwrap();
+        let res = (functions.dict_add_word_safe)(s, &[]);
+
+        match res {
+            Ok(()) => {
+                write!(writer, "FAILURE: Succeeded adding word to dictionary\r\n").unwrap();
+            }
+            Err(e) => {
+                write!(
+                    writer,
+                    "SUCCESS: Failed adding word to dictionary: {}\r\n",
+                    e
+                )
+                .unwrap();
+                assert_eq!(
+                    e,
+                    crate::error::Error::new(crate::error::ErrorKind::WordTooLong)
+                );
+            }
+        }
+    }
+
+    /// Test that adding a word that is too long fails
+    pub fn test_dict_add_word_too_long_by_two_fails(
+        writer: &mut dyn Write,
+        settings: &DictSettings,
+        functions: &DictFunctions,
+    ) {
+        write!(
+            writer,
+            "Testing word too long by two charactesr to dictionary\r\n"
+        )
+        .unwrap();
+        write!(writer, "Initializing dictionary\r\n").unwrap();
+        (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
+
+        write!(writer, "Adding word to dictionary\r\n").unwrap();
+        let s = "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFG";
         write!(
             writer,
             "Length of word: {}\r\n",
@@ -1268,6 +1374,306 @@ pub mod tests {
             }
 
             assert_eq!(n, test.num_chars);
+        }
+    }
+
+    /// Test that copying a pstring into a dictionary works
+    pub fn test_dict_pstring_copy_works(
+        writer: &mut dyn Write,
+        settings: &DictSettings,
+        pstring_functions: &PStringFunctions,
+        dict_functions: &DictFunctions,
+        dict_pstring_functions: &DictPStringFunctions,
+    ) {
+        // array of u32 with length 32
+        // 4 bytes for the length, plus 31 u32s (124 bytes) for the character data
+        let mut arr: [u32; 32] = [0; 32];
+
+        let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+
+        // initialize the pstring
+        let mut pstring = PString::new(&handle, pstring_functions).unwrap();
+
+        pstring.put('S' as u32).unwrap();
+        pstring.put('T' as u32).unwrap();
+        pstring.put('A' as u32).unwrap();
+        pstring.put('R' as u32).unwrap();
+
+        // Initialize the dictionary
+        (dict_functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
+
+        let res = (dict_functions.dict_add_word_safe)("BLRG", &[]);
+        write_test_result(
+            writer,
+            res.is_ok(),
+            "dict::tests::test_dict_pstring_copy_works should add original word",
+        );
+        assert!(res.is_ok());
+
+        // Make sure the word was added
+        let res = (dict_functions.dict_find_safe)("BLRG");
+        write_test_result(
+            writer,
+            res.is_ok(),
+            "dict::tests::test_dict_pstring_copy_works should find original word",
+        );
+        assert!(res.is_ok());
+
+        // Replace the word now
+        // We know the first word is the start of the dictionary
+        let _dict_ptr = settings.dictionary_addr as *const u8;
+
+        let mut word = res.unwrap();
+
+        let res = (dict_pstring_functions.dict_pstring_copy_safe)(&mut word, &mut pstring);
+
+        match res {
+            Ok(()) => {
+                write!(writer, "SUCCESS: Succeeded adding word to dictionary\r\n").unwrap();
+
+                // We get back a pointer to the word
+                // Compare it again here to make sure it's the same word
+                let res = (dict_functions.dict_find_safe)("STAR");
+                assert!(res.is_ok());
+                let c = res.unwrap();
+                let word = c.word;
+
+                write!(
+                    writer,
+                    "{} == {:?}, {} == {:?}, {} == {:?}, {} == {:?}\r\n",
+                    0x53, word[0], 0x54, word[1], 0x41, word[2], 0x52, word[3]
+                )
+                .unwrap();
+
+                assert_eq!(c.length, 0x04);
+                writeln!(writer, "SUCCESS: Length is correct").unwrap();
+                assert!(c.flags.is_empty());
+                writeln!(writer, "SUCCESS: Flags are correct").unwrap();
+                assert_eq!(word[0], 0x53);
+                assert_eq!(word[1], 0x54);
+                assert_eq!(word[2], 0x41);
+                assert_eq!(word[3], 0x52);
+                writeln!(writer, "SUCCESS: Content is correct").unwrap();
+            }
+            Err(e) => {
+                write!(
+                    writer,
+                    "FAILURE: Failed adding word to dictionary: {:?}\r\n",
+                    e
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    /// Test that copying a too-long pstring into a dictionary fails
+    pub fn test_dict_pstring_copy_too_short_fails(
+        writer: &mut dyn Write,
+        settings: &DictSettings,
+        pstring_functions: &PStringFunctions,
+        dict_functions: &DictFunctions,
+        dict_pstring_functions: &DictPStringFunctions,
+    ) {
+        // array of u32 with length 32
+        // 4 bytes for the length, plus 31 u32s (124 bytes) for the character data
+        let mut arr: [u32; 32] = [0; 32];
+
+        let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+
+        // initialize the pstring
+        let mut pstring = PString::new(&handle, pstring_functions).unwrap();
+
+        pstring.put('S' as u32).unwrap();
+        pstring.put('T' as u32).unwrap();
+        pstring.put('A' as u32).unwrap();
+
+        // Initialize the dictionary
+        (dict_functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
+
+        let res = (dict_functions.dict_add_word_safe)("BLRG", &[]);
+        write_test_result(
+            writer,
+            res.is_ok(),
+            "dict::tests::test_dict_pstring_copy_too_short_fails should add original word",
+        );
+        assert!(res.is_ok());
+
+        // Make sure the word was added
+        let res = (dict_functions.dict_find_safe)("BLRG");
+        write_test_result(
+            writer,
+            res.is_ok(),
+            "dict::tests::test_dict_pstring_copy_too_short_fails should find original word",
+        );
+        assert!(res.is_ok());
+
+        // Replace the word now
+        // We know the first word is the start of the dictionary
+        let _dict_ptr = settings.dictionary_addr as *const u8;
+
+        let mut word = res.unwrap();
+
+        let res = (dict_pstring_functions.dict_pstring_copy_safe)(&mut word, &mut pstring);
+        write_test_result(
+            writer,
+            res.is_err(),
+            "dict::tests::test_dict_pstring_copy_too_short_fails should fail",
+        );
+    }
+
+    /// Test that copying a too-long pstring into a dictionary fails
+    pub fn test_dict_pstring_copy_too_long_fails(
+        writer: &mut dyn Write,
+        settings: &DictSettings,
+        pstring_functions: &PStringFunctions,
+        dict_functions: &DictFunctions,
+        dict_pstring_functions: &DictPStringFunctions,
+    ) {
+        // array of u32 with length 32
+        // 4 bytes for the length, plus 31 u32s (124 bytes) for the character data
+        let mut arr: [u32; 32] = [0; 32];
+
+        let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+
+        // initialize the pstring
+        let mut pstring = PString::new(&handle, pstring_functions).unwrap();
+
+        pstring.put('S' as u32).unwrap();
+        pstring.put('T' as u32).unwrap();
+        pstring.put('A' as u32).unwrap();
+        pstring.put('R' as u32).unwrap();
+        pstring.put('S' as u32).unwrap();
+
+        // Initialize the dictionary
+        (dict_functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
+
+        let res = (dict_functions.dict_add_word_safe)("BLRG", &[]);
+        write_test_result(
+            writer,
+            res.is_ok(),
+            "dict::tests::test_dict_pstring_copy_too_long_fails should add original word",
+        );
+        assert!(res.is_ok());
+
+        // Make sure the word was added
+        let res = (dict_functions.dict_find_safe)("BLRG");
+        write_test_result(
+            writer,
+            res.is_ok(),
+            "dict::tests::test_dict_pstring_copy_too_long_fails should find original word",
+        );
+        assert!(res.is_ok());
+
+        // Replace the word now
+        // We know the first word is the start of the dictionary
+        let _dict_ptr = settings.dictionary_addr as *const u8;
+
+        let mut word = res.unwrap();
+
+        let res = (dict_pstring_functions.dict_pstring_copy_safe)(&mut word, &mut pstring);
+        write_test_result(
+            writer,
+            res.is_err(),
+            "dict::tests::test_dict_pstring_copy_too_long_fails should fail",
+        );
+    }
+
+    /// Test that finding a word in the dictionary works
+    pub fn test_dict_add_pstring_works(
+        writer: &mut dyn Write,
+        settings: &DictSettings,
+        pstring_functions: &PStringFunctions,
+        functions: &DictFunctions,
+        dict_pstring_functions: &DictPStringFunctions,
+    ) {
+        // array of u32 with length 32
+        // 4 bytes for the length, plus 31 u32s (124 bytes) for the character data
+        let mut arr: [u32; 32] = [0; 32];
+
+        let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
+
+        // initialize the pstring
+        let mut pstring = PString::new(&handle, pstring_functions).unwrap();
+
+        pstring.put('S' as u32).unwrap();
+        pstring.put('T' as u32).unwrap();
+        pstring.put('A' as u32).unwrap();
+        pstring.put('R' as u32).unwrap();
+
+        (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
+
+        let res = (dict_pstring_functions.dict_pstring_add_pstring_safe)(&mut pstring, &[]);
+
+        match res {
+            Ok(()) => {
+                write!(writer, "SUCCESS: Succeeded adding word to dictionary\r\n").unwrap();
+            }
+            Err(e) => {
+                write!(
+                    writer,
+                    "FAILURE: Failed adding word to dictionary: {}\r\n",
+                    e
+                )
+                .unwrap();
+            }
+        }
+
+        // Make sure the word was added
+        let res = (functions.dict_find_safe)("STAR");
+
+        match res {
+            Ok(c) => {
+                write!(
+                    writer,
+                    "SUCCESS: Succeeded finding added word in dictionary\r\n"
+                )
+                .unwrap();
+                // We get back a pointer to the word
+                // Compare it again here to make sure it's the same word
+                let word = c.word;
+
+                write!(
+                    writer,
+                    "{} == {:?}, {} == {:?}, {} == {:?}, {} == {:?}\r\n",
+                    0x53, word[0], 0x54, word[1], 0x41, word[2], 0x52, word[3]
+                )
+                .unwrap();
+
+                assert_eq!(c.length, 0x04);
+                assert_eq!(word[0], 0x53);
+                assert_eq!(word[1], 0x54);
+                assert_eq!(word[2], 0x41);
+                assert_eq!(word[3], 0x52);
+            }
+            Err(e) => {
+                write!(
+                    writer,
+                    "FAILURE: Failed finding added word in dictionary: {}\r\n",
+                    e
+                )
+                .unwrap();
+            }
+        }
+
+        // Double check to make sure it doesn't find junk
+        let res = (functions.dict_find_safe)("TEST");
+
+        match res {
+            Ok(_v) => {
+                write!(
+                    writer,
+                    "FAILURE: Should not find unknown word in dictionary\r\n"
+                )
+                .unwrap();
+            }
+            Err(e) => {
+                write!(
+                    writer,
+                    "SUCCESS: Should not find unknown word in dictionary: {}\r\n",
+                    e
+                )
+                .unwrap();
+            }
         }
     }
 }

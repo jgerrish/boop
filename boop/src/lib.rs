@@ -11,6 +11,7 @@ use core::{
 pub mod buffer;
 pub mod dict;
 pub mod error;
+pub mod pstring;
 pub mod stack;
 
 /// A handle to an array to manage lifetimes and concurrency
