@@ -21,6 +21,7 @@ pub enum Flag {
 /// A simple structure to hold a dictionary word.
 /// This doesn't parse the structure itself, and isa placeholder to get testing
 /// up and running.
+#[repr(C, align(1))]
 pub struct Word {
     /// The link to the previous word in the dictionary
     pub link: u32,
@@ -29,7 +30,12 @@ pub struct Word {
     /// The word flags
     pub flags: &'static [Flag],
     /// The word itself
-    pub word: &'static [u32],
+    // Rust now does checks on aligned data for core::slice::from_raw_parts
+    // Our words aren't always aligned on 32-bit boundaries.
+    //
+    // So we have to do a complete serialization / deserialization
+    // In the meantime, until the rewrite, we can use raw pointers.
+    pub word: *const u32,
 }
 
 /// The settings for the dictionary
@@ -104,7 +110,11 @@ pub mod tests {
         settings: &DictSettings,
         functions: &DictFunctions,
     ) {
-        write!(writer, "Initializing dictionary\r\n").unwrap();
+        write!(
+            writer,
+            "test_dict_add_word_works::Initializing dictionary\r\n"
+        )
+        .unwrap();
         (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
 
         write!(writer, "Adding word to dictionary\r\n").unwrap();
@@ -138,18 +148,38 @@ pub mod tests {
                 // Compare it again here to make sure it's the same word
                 let word = c.word;
 
+                // We do this check even though we know in this
+                // application we are not likely to go over the limit.
+                // We're using generated test data that is small.
+                // But it might get loaded on some test device that is
+                // running a large OS or runtime.
+                //
+                // WARNING: In a future application, we might want to
+                // wrap these operations in a lock or other
+                // protection.  Future versions with threads will need
+                // to take that into account.  That will be tested or
+                // documented.
+                assert!(word.wrapping_add(3) > word);
+
                 write!(
                     writer,
                     "{} == {:?}, {} == {:?}, {} == {:?}, {} == {:?}\r\n",
-                    0x53, word[0], 0x54, word[1], 0x41, word[2], 0x52, word[3]
+                    0x53,
+                    unsafe { *word },
+                    0x54,
+                    unsafe { *(word.wrapping_add(1)) },
+                    0x41,
+                    unsafe { *(word.wrapping_add(2)) },
+                    0x52,
+                    unsafe { *(word.wrapping_add(3)) }
                 )
                 .unwrap();
 
                 assert_eq!(c.length, 0x04);
-                assert_eq!(word[0], 0x53);
-                assert_eq!(word[1], 0x54);
-                assert_eq!(word[2], 0x41);
-                assert_eq!(word[3], 0x52);
+                assert_eq!(unsafe { *word }, 0x53);
+                assert_eq!(unsafe { *(word.wrapping_add(1)) }, 0x54);
+                assert_eq!(unsafe { *(word.wrapping_add(2)) }, 0x41);
+                assert_eq!(unsafe { *(word.wrapping_add(3)) }, 0x52);
             }
             Err(e) => {
                 write!(
@@ -189,10 +219,18 @@ pub mod tests {
         settings: &DictSettings,
         functions: &DictFunctions,
     ) {
-        write!(writer, "Initializing dictionary\r\n").unwrap();
+        write!(
+            writer,
+            "test_dict_add_two_words_works::Initializing dictionary\r\n"
+        )
+        .unwrap();
         (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
 
-        write!(writer, "Adding word to dictionary\r\n").unwrap();
+        write!(
+            writer,
+            "test_dict_add_two_words_works::Adding word to dictionary\r\n"
+        )
+        .unwrap();
         let res = (functions.dict_add_word_safe)("STAR", &[]);
 
         match res {
@@ -344,7 +382,11 @@ pub mod tests {
         settings: &DictSettings,
         functions: &DictFunctions,
     ) {
-        write!(writer, "Initializing dictionary\r\n").unwrap();
+        write!(
+            writer,
+            "test_dict_add_hidden_word_works::Initializing dictionary\r\n"
+        )
+        .unwrap();
         (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
 
         write!(writer, "Adding word to dictionary\r\n").unwrap();
@@ -499,7 +541,11 @@ pub mod tests {
         settings: &DictSettings,
         functions: &DictFunctions,
     ) {
-        write!(writer, "Initializing dictionary\r\n").unwrap();
+        write!(
+            writer,
+            "test_dict_add_immediate_word_works::Initializing dictionary\r\n"
+        )
+        .unwrap();
         (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
 
         write!(writer, "Adding word to dictionary\r\n").unwrap();
@@ -619,7 +665,10 @@ pub mod tests {
                 .unwrap();
                 // Double check the word is a match
                 for (i, c) in word.chars().enumerate() {
-                    assert_eq!(c as u32, w.word[i]);
+                    if i > 0 {
+                        assert!(w.word.wrapping_add(i) > w.word);
+                    }
+                    assert_eq!(c as u32, unsafe { *(w.word.wrapping_add(i)) });
                 }
                 // Double check the length of the immediate word
                 assert_eq!(w.length, 6);
@@ -664,7 +713,11 @@ pub mod tests {
         settings: &DictSettings,
         functions: &DictFunctions,
     ) {
-        write!(writer, "Testing add too long word to dictionary\r\n").unwrap();
+        write!(
+            writer,
+            "test_dict_add_word_too_long_fails::Testing add too long word to dictionary\r\n"
+        )
+        .unwrap();
         write!(writer, "Initializing dictionary\r\n").unwrap();
         (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
 
@@ -703,7 +756,11 @@ pub mod tests {
         settings: &DictSettings,
         functions: &DictFunctions,
     ) {
-        write!(writer, "Initializing dictionary\r\n").unwrap();
+        write!(
+            writer,
+            "test_dict_add_word_too_short_fails::Initializing dictionary\r\n"
+        )
+        .unwrap();
         (functions.dict_init_safe)(settings.dictionary_addr, settings.dictionary_size);
 
         write!(writer, "Adding word to dictionary\r\n").unwrap();
@@ -936,15 +993,20 @@ pub mod tests {
 
                 let word = c.word;
 
+                assert!(word.wrapping_add(1) > word);
+
                 write!(
                     writer,
                     "{} == {:?}, {} == {:?}\r\n",
-                    0x661F, word[0], 0x661F, word[1]
+                    0x661F,
+                    unsafe { *word },
+                    0x661F,
+                    unsafe { *(word.wrapping_add(1)) }
                 )
                 .unwrap();
                 assert_eq!(c.length, 0x02);
-                assert_eq!(word[0], 0x661F);
-                assert_eq!(word[1], 0x661F);
+                assert_eq!(unsafe { *word }, 0x661F);
+                assert_eq!(unsafe { *(word.wrapping_add(1)) }, 0x661F);
             }
             Err(e) => {
                 write!(

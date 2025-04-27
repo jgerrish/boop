@@ -495,12 +495,11 @@ pub fn dict_find_safe(word: &str) -> Result<Word, Error> {
             };
 
             let word_ptr = ((res as usize) + 5) as *const u32;
-            let slice = unsafe { core::slice::from_raw_parts(word_ptr, word_len as usize) };
             Ok(Word {
                 link: res as u32,
                 length: word_len,
                 flags,
-                word: slice,
+                word: word_ptr,
             })
         }
         1 => Err(boop::error::Error::new(
