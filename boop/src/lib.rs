@@ -16,7 +16,11 @@ pub mod stack;
 /// A handle to an array to manage lifetimes and concurrency
 pub struct ArrayHandle<'a, T> {
     /// Pointer to the array
-    pub ptr: *mut T,
+    /// This does not need to be mutable because we don't change
+    /// the fields of an ArrayHandle after we create it, and we don't change
+    /// WHICH array we are pointing to.  An ArrayHandle should be the only
+    /// way to modify that array.
+    pub ptr: *const T,
     /// Length of the array
     pub len: usize,
     /// We want to have a lifetime on an ArrayHandle tied to the data

@@ -36,13 +36,14 @@ use boop::{
 // Making the variable mutable in Rust marks it as W.
 
 /// The Forth return stack
+/// This needs to be mutable because we read and write to the data.
 #[link_section = ".ram2bss"]
 static mut FORTH_RETURN_STACK: [u32; 512] = [0; 512];
 
 /// A handle to the forth return stack data
 pub static mut FORTH_RETURN_STACK_HANDLE: Mutex<RefCell<Option<ArrayHandle<u32>>>> = unsafe {
     Mutex::new(RefCell::new(Some(ArrayHandle {
-        ptr: FORTH_RETURN_STACK.as_mut_ptr(),
+        ptr: FORTH_RETURN_STACK.as_ptr(),
         len: FORTH_RETURN_STACK.len(),
         _marker: PhantomData,
     })))
@@ -55,23 +56,26 @@ pub static mut FORTH_RETURN_STACK_HANDLE: Mutex<RefCell<Option<ArrayHandle<u32>>
 /// For example, if the size allocated below is 1024, and the data
 /// type size is four bytes, then the number of items that can be
 /// stored is 255, not 256.
+/// This needs to be mutable because we read and write to the data.
 #[link_section = ".ram2bss"]
 static mut FORTH_BUFFER: [u32; 256] = [0; 256];
 
 /// wrapper around the buffer
 pub static mut FORTH_BUFFER_HANDLE: Mutex<RefCell<Option<ArrayHandle<u32>>>> = unsafe {
     Mutex::new(RefCell::new(Some(ArrayHandle {
-        ptr: FORTH_BUFFER.as_mut_ptr(),
+        ptr: FORTH_BUFFER.as_ptr(),
         len: FORTH_BUFFER.len(),
         _marker: PhantomData,
     })))
 };
 
 /// temporary buffer to store UTF-32 encoded strings
+/// This needs to be mutable because we read and write to the data.
 #[link_section = ".ram2bss"]
 pub static mut FORTH_WORD_TMP_BUFFER: [u32; 128] = [0; 128];
 
 /// dictionary storage
+/// This needs to be mutable because we read and write to the data.
 #[link_section = ".ram2bss"]
 pub static mut FORTH_DICTIONARY: [u8; 1024] = [0; 1024];
 
@@ -92,7 +96,7 @@ extern "C" {
     /// Initialize the stack
     pub fn jjforth_stack_init(
         stack: *mut StackStruct,
-        memory_start: *mut u32,
+        memory_start: *const u32,
         stack_len: u32,
     ) -> u32;
 
@@ -169,7 +173,7 @@ extern "C" {
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn stack_init_safe(
     stack: *mut StackStruct,
-    memory_start: *mut u32,
+    memory_start: *const u32,
     stack_len: u32,
 ) -> Result<(), boop::stack::Error> {
     let res = unsafe { jjforth_stack_init(stack, memory_start, stack_len) };
@@ -470,7 +474,7 @@ pub fn dict_find_safe(word: &str) -> Result<Word, Error> {
         encode_string_as_utf32(word, &mut FORTH_WORD_TMP_BUFFER)?;
     }
 
-    let dst = unsafe { FORTH_WORD_TMP_BUFFER.as_mut_ptr() };
+    let dst = unsafe { FORTH_WORD_TMP_BUFFER.as_ptr() };
 
     // dict_encode_ascii_string_as_utf32_safe(word, dst)?;
 
