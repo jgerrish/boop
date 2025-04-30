@@ -103,7 +103,7 @@ impl<'a> Debug for StackStruct<'a> {
 /// This is primarily used to make testing easier
 pub struct StackFunctions {
     /// The stack initialization function
-    pub init: fn(*mut StackStruct, *const u32, u32) -> core::result::Result<(), Error>,
+    pub init: fn(*mut StackStruct, *mut u32, u32) -> core::result::Result<(), Error>,
     /// The push function for the stack
     pub push: fn(*const StackStruct, u32) -> core::result::Result<(), Error>,
     /// The pop function for the stack
@@ -130,7 +130,7 @@ pub trait StackOps<T> {
     /// let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
     /// let sf = StackFunctions {
     ///     init: |_stack: *mut StackStruct,
-    ///            _memory_start: *const u32,
+    ///            _memory_start: *mut u32,
     ///            _stack_len: u32|
     ///      -> core::result::Result<(), Error> { Ok(()) },
     ///     push: |_stack: *const StackStruct, _value: u32| -> core::result::Result<(), Error> {
@@ -165,7 +165,7 @@ pub trait StackOps<T> {
     /// let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
     /// let sf = StackFunctions {
     ///     init: |_stack: *mut StackStruct,
-    ///            _memory_start: *const u32,
+    ///            _memory_start: *mut u32,
     ///            _stack_len: u32|
     ///      -> core::result::Result<(), Error> { Ok(()) },
     ///     push: |_stack: *const StackStruct, _value: u32| -> core::result::Result<(), Error> {
@@ -256,7 +256,7 @@ pub struct StackTester<'a> {
 /// Initialize the stacks
 pub fn stack_init_safe(
     stack: &mut Stack,
-    memory_start: *const u32,
+    memory_start: *mut u32,
     stack_len: u32,
 ) -> core::result::Result<(), Error> {
     let addr = core::ptr::addr_of_mut!(stack.stack_struct);
@@ -405,7 +405,7 @@ pub mod tests {
             functions: stack_tester.stack.functions,
         };
 
-        let ptr = (u32::MAX - (u32::BITS / 8)) as *const u32;
+        let ptr = (u32::MAX - (u32::BITS / 8)) as *mut u32;
         let res = crate::stack::stack_init_safe(&mut stack, ptr, handle.len as u32);
 
         write_test_result(
@@ -433,7 +433,7 @@ pub mod tests {
             functions: stack_tester.stack.functions,
         };
 
-        let ptr = u32::MAX as *const u32;
+        let ptr = u32::MAX as *mut u32;
         let res = crate::stack::stack_init_safe(&mut stack, ptr, handle.len as u32);
 
         match res {
@@ -687,7 +687,7 @@ mod doc_tests {
         let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
         let sf = StackFunctions {
             init: |_stack: *mut StackStruct,
-                   _memory_start: *const u32,
+                   _memory_start: *mut u32,
                    _stack_len: u32|
              -> core::result::Result<(), Error> { Ok(()) },
             push: |_stack: *const StackStruct, _value: u32| -> core::result::Result<(), Error> {
@@ -708,7 +708,7 @@ mod doc_tests {
         let handle = ArrayHandle::new(arr.as_mut_ptr(), arr.len());
         let sf = StackFunctions {
             init: |_stack: *mut StackStruct,
-                   _memory_start: *const u32,
+                   _memory_start: *mut u32,
                    _stack_len: u32|
              -> core::result::Result<(), Error> { Ok(()) },
             push: |_stack: *const StackStruct, _value: u32| -> core::result::Result<(), Error> {
